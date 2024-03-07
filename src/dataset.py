@@ -271,7 +271,7 @@ class SEDDataset(Dataset):
                 cols = ["onset", "offset", "event_label"]
                 label = self.df[self.df.filename == filename][cols]
                 if filename in self.offset and label.offset.iloc[-1] > self.offset[filename]:
-                        label.offset.iloc[-1] = self.offset[filename]
+                    label.offset.iloc[-1] = self.offset[filename]
                 # label[]
                 if label.empty:
                     label = []
