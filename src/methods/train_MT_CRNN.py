@@ -137,6 +137,10 @@ def main(args):
     shutil.copy(args.config, (exp_path / "config.yaml"))
     shutil.copy("src/methods/trainer_MT.py", (exp_path / "trainer.py"))
     shutil.copy("src/methods/train_MT_CRNN.py", (exp_path / "train.py"))
+    shutil.copy("src/models/concat_data.py", (exp_path / "concat_data.py"))
+    shutil.copy("src/models/CRNN.py", (exp_path / "CRNN.py"))
+
+
 
     # get config
     data_root = cfg["data_root"]
