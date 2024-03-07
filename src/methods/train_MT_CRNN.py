@@ -11,7 +11,7 @@ import os
 
 os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
 os.environ["WANDB_MODE"] = 'offline'
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -176,6 +176,9 @@ def main(args):
     feat_dir = Path(f"{data_root}/features/{feat_root}")
     event_dir = Path(f"{data_root}/feature_raw/{feat_root}")
 
+    if Path(f"stats/stats_CRNN.npz").exists():
+        shutil.copy("stats/stats_CRNN.npz", f"{exp_path}/stats.npz")
+
     # collect dataset stats
     if Path(f"{exp_path}/stats.npz").exists():
         stats = np.load(
@@ -252,6 +255,8 @@ def main(args):
         encode_function=encode_function,
         pooling_time_ratio=cfg["pooling_time_ratio"],
         transforms=test_transforms,
+        n_frames_per_sec=n_frames_per_sec,
+        is_valid=True,
     )
 
     batch_size = cfg["batch_size"]
