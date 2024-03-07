@@ -29,7 +29,6 @@ class SEDDataset_synth(Dataset):
         twice_data=False,
         use_events=False,
         event_dir: Path = None,
-        n_frames_per_sec: int = None,
         classes: list = None,
     ):
         self.df = df
@@ -39,7 +38,6 @@ class SEDDataset_synth(Dataset):
         self.transforms = transforms
         self.filenames = df.filename.drop_duplicates().values
         self.twice_data = twice_data
-        self.n_frames_per_sec = n_frames_per_sec
 
         self.use_events = use_events
         self.event_dir = event_dir
@@ -178,6 +176,8 @@ class SEDDataset(Dataset):
         pooling_time_ratio: int = 1,
         transforms=None,
         twice_data=False,
+        n_frames_per_sec=0,
+        is_valid=False,
     ):
         self.df = df
         self.data_dir = data_dir
@@ -187,7 +187,10 @@ class SEDDataset(Dataset):
         self.filenames = df.filename.drop_duplicates().values
         self.features = {}
         self.twice_data = twice_data
-        self._check_exist()
+        self.n_frames_per_sec = n_frames_per_sec
+        self.offset = {}
+        self._check_exist(is_valid)
+
 
     def __len__(self):
         return len(self.filenames)
@@ -218,19 +221,22 @@ class SEDDataset(Dataset):
                 data_id,
             )
 
-    def _check_exist(self):
+    def _check_exist(self, valid=False):
         del_ids = []
         for i in range(len(self.filenames)):
             f = self.filenames[i]
             npy_path = os.path.join(self.data_dir / f.replace("wav", "npy"))
             if not os.path.exists(npy_path):
                 temp_strs = self.filenames[i].split('_')
-                temp_strs[-1] = str(float(temp_strs[-1][:-4]) - 1) + '00.wav'
+                temp_offset = float(temp_strs[-1][:-4]) - 1
+                temp_strs[-1] = str(temp_offset) + '00.wav'
                 if not os.path.exists(self.data_dir / '_'.join(temp_strs).replace("wav", "npy")):
                     del_ids.append(i)
                 else:
                     self.df.loc[self.df['filename'] == f, 'filename'] = '_'.join(temp_strs)
                     self.filenames[i] = '_'.join(temp_strs)
+                    if valid:
+                        self.offset[self.filenames[i]] = temp_offset * self.n_frames_per_sec
 
         self.filenames = np.delete(self.filenames, del_ids)
         # temp = self.filenames
@@ -264,6 +270,9 @@ class SEDDataset(Dataset):
             else:
                 cols = ["onset", "offset", "event_label"]
                 label = self.df[self.df.filename == filename][cols]
+                if filename in self.offset and label.offset.iloc[-1] > self.offset[filename]:
+                        label.offset.iloc[-1] = self.offset[filename]
+                # label[]
                 if label.empty:
                     label = []
         else:
