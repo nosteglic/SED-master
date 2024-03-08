@@ -45,7 +45,9 @@ def my_collate(batch):
 
     # events_batch = [transposed_split[1]]
     events_batch = transposed_split[1]
-
+    if len(transposed_split) == 3:
+        bg_batch = [default_collate(samples) for samples in zip(*transposed_split[2])]
+        return original_result, events_batch, bg_batch
     return original_result, events_batch
 
 def collect_stats(datasets, save_path):
@@ -174,7 +176,6 @@ def main(args):
                 f"n_fft{feat_cfg['mel_spec']['n_fft']}_hop_size{feat_cfg['mel_spec']['hop_size']}"
 
     feat_dir = Path(f"{data_root}/features/{feat_root}")
-    event_dir = Path(f"{data_root}/feature_raw/{feat_root}")
 
     if Path(f"stats/stats_CRNN.npz").exists():
         shutil.copy("stats/stats_CRNN.npz", f"{exp_path}/stats.npz")
@@ -220,6 +221,7 @@ def main(args):
     )
 
     use_events = cfg["use_events"]
+    use_bg = cfg['use_bg']
     train_sync_dataset = SEDDataset_synth(
         train_sync_df,
         data_dir=(feat_dir / "train/synthetic"),
@@ -228,8 +230,7 @@ def main(args):
         transforms=train_transforms,
         twice_data=True,
         use_events = use_events,
-        event_dir=event_dir,
-        n_frames_per_sec = n_frames_per_sec,
+        use_bg = use_bg,
         classes = classes,
     )
     train_weak_dataset = SEDDataset(
@@ -369,6 +370,7 @@ def main(args):
         resume=cfg["resume"],
         trainer_options=trainer_options,
         use_events=use_events,
+        use_bg=use_bg,
     )
 
     trainer.run()

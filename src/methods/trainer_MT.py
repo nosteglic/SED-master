@@ -92,8 +92,10 @@ class MeanTeacherTrainer(object):
         resume=None,
         trainer_options=None,
         use_events = False,
+        use_bg = False,
     ):
         self.use_events = use_events
+        self.use_bg = use_bg
         self.model_name = model_name
         self.model = model.cuda() if torch.cuda.is_available() else model
         self.ema_model = ema_model.cuda() if torch.cuda.is_available() else ema_model
@@ -211,9 +213,14 @@ class MeanTeacherTrainer(object):
         load data
         '''
         events_batch = None
+        bg_batch = None
 
         if self.use_events:
-            [sample_sync, sample_sync_ema, target_sync, ids_sync], events_batch = next(self.train_iter_sync)
+            if not self.use_bg:
+                [sample_sync, sample_sync_ema, target_sync, ids_sync], events_batch = next(self.train_iter_sync)
+            else:
+                [sample_sync, sample_sync_ema, target_sync, ids_sync], events_batch, bg_batch = next(self.train_iter_sync)
+                bg_batch = bg_batch[0]
         else:
             sample_sync, sample_sync_ema, target_sync, ids_sync = next(self.train_iter_sync)
         # sample_sync - (12, 1, 625, 128)
@@ -252,11 +259,11 @@ class MeanTeacherTrainer(object):
         rampup_value = ramps.exp_rampup(self.forward_count, self.options.rampup_length)
         consistency_cost = self.max_consistency_cost * rampup_value
         with torch.no_grad():
-            output_ema_sync = self.ema_model(sample_sync, events=events_batch)
+            output_ema_sync = self.ema_model(sample_sync, events=events_batch, bg=bg_batch)
             output_ema_weak = self.ema_model(sample_real_weak)
             output_ema_unlabel = self.ema_model(sample_real_unlabel)
 
-        output_sync = self.model(sample_sync, events=events_batch)
+        output_sync = self.model(sample_sync, events=events_batch, bg=bg_batch)
         output_weak = self.model(sample_real_weak)
         output_unlabel = self.model(sample_real_unlabel)
 

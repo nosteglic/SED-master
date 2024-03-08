@@ -146,10 +146,15 @@ def ext_synth(cfg, nj):
 
 def ext_raw(cfg, nj):
     super_root = os.path.split(cfg['data_root'])[0]
-    wav_root = f"{super_root}/sources_raw_targets"
-    feat_root = f"{cfg['data_root']}/feature_raw"
+    # wav_root = f"{super_root}/sources_raw_targets"
+    # feat_root = f"{cfg['data_root']}/feature_raw"
+    wav_root = f"{super_root}/sources_raw_backgrounds"
+    feat_root = f"{cfg['data_root']}/feature_raw_bg"
+
     cfg = cfg["feature"]
-    wav_dir = Path(f"{super_root}/wav_raw/sr{cfg['sample_rate']}")
+    # wav_dir = Path(f"{super_root}/wav_raw/sr{cfg['sample_rate']}")
+    wav_dir = Path(f"{super_root}/wav_raw_bg/sr{cfg['sample_rate']}")
+
     resample_wav_raw(cfg=cfg, need_resample_wav=False, wav_root=wav_root, wav_dir=wav_dir, nj=nj)
 
     feat_dir = Path(

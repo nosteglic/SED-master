@@ -33,7 +33,7 @@ class SEDModel(nn.Module):
 
         self.reset_parameters()
 
-    def forward(self, x, events=None): # x (bs, chan, frames, freqs) - (12, 1, 625, 128)
+    def forward(self, x, events=None, bg=None): # x (bs, chan, frames, freqs) - (12, 1, 625, 128)
         x_batch = x.shape[0]
         if events is not None:
             events_x, events_y, events_len = concat_data1(
@@ -43,6 +43,7 @@ class SEDModel(nn.Module):
                 T=x.shape[-2],
                 F=x.shape[-1],
                 ptr=self.ptr,
+                bg=bg,
             )
 
             x = torch.cat([x, events_x], dim=0)

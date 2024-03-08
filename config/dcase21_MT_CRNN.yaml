@@ -4,7 +4,7 @@ seed: "07"
 # wandb init
 wandb:
   project: 124-concat
-  name: test12-0.1
+  name: CRNN-b12-nosigmoid-concat-nocontrast-bg
   entity: team-417
   resume: True
   id:
@@ -13,6 +13,7 @@ data_root: /data2/syx/DCASE2021
 #data_root: /data_ssd1/syx/sed_data/DCASE2021
 
 use_events: True
+use_bg: True
 gen_count: 1
 batch_size: 12
 batch_size_sync: 12

@@ -4,10 +4,10 @@ import numpy as np
 
 def calculate_similarity(M):
     M = M / torch.linalg.vector_norm(M, dim=2, keepdim=True)
-    # return torch.bmm(M, M.permute(0,2,1))
+    # return torch.sigmoid(torch.bmm(M, M.permute(0,2,1)))
     return torch.bmm(M, M.permute(0,2,1))
 
-def concat_data1(events_batch, n_class, gen_count=2, T=625, F=128, ptr=4):
+def concat_data1(events_batch, n_class, bg=None, gen_count=2, T=625, F=128, ptr=4):
     """
     将x拼成两条拼接音频，并生成这两条音频的label
     :param events_batch: 字典列表，长度为batch_size
@@ -51,6 +51,8 @@ def concat_data1(events_batch, n_class, gen_count=2, T=625, F=128, ptr=4):
 
     gen_len = [(i - ptr//2) // ptr + 1 for i in gen_len]
 
+    if bg is not None:
+        gen_data = gen_data.add(bg[:,:T,:])
 
     gen_label = gen_label.to("cuda" if torch.cuda.is_available() else "cpu")
     gen_data = gen_data.to("cuda" if torch.cuda.is_available() else "cpu")
