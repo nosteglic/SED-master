@@ -6,6 +6,10 @@ import torch
 from torch.utils.data import Dataset
 import os
 import math
+import random
+
+
+
 
 # def encode_duration_df(events_df, labels):
 #     if type(labels) in [np.ndarray, np.array]:
@@ -30,6 +34,7 @@ class SEDDataset_synth(Dataset):
         use_events=False,
         classes: list = None,
         use_bg = False,
+        gen_count=1,
     ):
         self.df = df
         self.data_dir = data_dir
@@ -41,6 +46,7 @@ class SEDDataset_synth(Dataset):
 
         self.use_events = use_events
         self.use_bg = use_bg
+        self.gen_count = gen_count
 
         if use_events or use_bg:
             temp_root, feat_dir = os.path.split(os.path.abspath(os.path.join(self.data_dir, "../..")))
@@ -52,7 +58,7 @@ class SEDDataset_synth(Dataset):
 
 
         if type(classes) in [np.ndarray, np.array]:
-            self.classes = classes.tolist()
+            self.classes = list(classes)
 
         self._check_exist()
 
@@ -62,16 +68,25 @@ class SEDDataset_synth(Dataset):
 
     def __getitem__(self, index):
         data_id = self.filenames[index]
-        if self.use_events:
-            if self.use_bg:
-                data, events_list, bg_data = self._get_sample(data_id)
-                # bg_dict = {"id": data_id, "bg": bg_data}
-            else:
-                data, events_list = self._get_sample(data_id)
-            events_dict = {"id": data_id, "events": events_list}
+        data = self._get_sample(data_id)
+        label = self._get_label(data_id)  # label - (625, 10)
+
+        if self.use_bg:
+            bg_data = self._get_bg(data_id)
         else:
-            data = self._get_sample(data_id)
-        label = self._get_label(data_id) # label - (625, 10)
+            bg_data = None
+        if self.use_events:
+            events_dict = self._get_events(data_id)
+            events_data = self.concat_data(
+                events_dict,
+                n_class=len(self.classes),
+                bg=bg_data,
+                gen_count=self.gen_count,
+                T=data.shape[0],
+                F=data.shape[1],
+                ptr=self.ptr
+            )
+
         if self.transforms is not None:
             data, label = self.transforms((data, label))
             # data - 0 - (625, 128)
@@ -84,48 +99,18 @@ class SEDDataset_synth(Dataset):
 
         # Return twice data with different augmentation if use mean teacher training
         if not self.twice_data:
-            if not self.use_events:
-                return (
-                    torch.from_numpy(data).float().unsqueeze(0),
-                    torch.from_numpy(label).float(),
-                    data_id,
-                )
-            else:
-                if not self.use_bg:
-                    return (
-                        torch.from_numpy(data).float().unsqueeze(0),
-                        torch.from_numpy(label).float(),
-                        data_id,
-                    ), events_dict
-                else:
-                    return (
-                        torch.from_numpy(data).float().unsqueeze(0),
-                        torch.from_numpy(label).float(),
-                        data_id,
-                    ), events_dict, torch.from_numpy(bg_data).float().unsqueeze(0)
+            return (
+                torch.from_numpy(data).float().unsqueeze(0),
+                torch.from_numpy(label).float(),
+                data_id,
+            )
         else:
-            if not self.use_events:
-                return (
-                    torch.from_numpy(data[0]).float().unsqueeze(0),
-                    torch.from_numpy(data[1]).float().unsqueeze(0),
-                    torch.from_numpy(label).float(),
-                    data_id,
-                )
-            else:
-                if not self.use_bg:
-                    return (
-                        torch.from_numpy(data[0]).float().unsqueeze(0),
-                        torch.from_numpy(data[1]).float().unsqueeze(0),
-                        torch.from_numpy(label).float(),
-                        data_id,
-                    ), events_dict
-                else:
-                    return (
-                        torch.from_numpy(data[0]).float().unsqueeze(0),
-                        torch.from_numpy(data[1]).float().unsqueeze(0),
-                        torch.from_numpy(label).float(),
-                        data_id,
-                    ), events_dict, torch.from_numpy(bg_data).float().unsqueeze(0)
+            return (
+                torch.from_numpy(data[0]).float().unsqueeze(0),
+                torch.from_numpy(data[1]).float().unsqueeze(0),
+                torch.from_numpy(label).float(),
+                data_id,
+            )
 
     def _check_exist(self):
         del_ids = []
@@ -135,52 +120,53 @@ class SEDDataset_synth(Dataset):
                 del_ids.append(i)
         self.filenames = np.delete(self.filenames, del_ids)
 
-    def _get_sample(self, filename):
-        data = np.load(self.data_dir / filename.replace("wav", "npy")).astype(np.float32)
+    def _get_bg(self, filename):
         fileid = filename[:-4]
-        events_root = f"{self.event_dir}/{fileid}"
+        bg_data = None
         bg_root = f"{self.bg_dir}/{fileid}"
-        if self.use_bg and os.path.exists(bg_root):
+        if bg_root is not None and os.path.exists(bg_root):
             for bg_path in os.listdir(bg_root):
                 if bg_path[-4:] == ".npy":
                     bg_data = np.load(f"{bg_root}/{bg_path}").astype(np.float32)
+        return bg_data
 
-        if self.use_events and os.path.exists(events_root):
-            events_list = []
+    def _get_events(self, filename):
+        fileid = filename[:-4]
+        events_data = None
+        events_root = f"{self.event_dir}/{fileid}"
+        events_dict = {}
+        if events_root is not None and os.path.exists(events_root):
             for event_path in os.listdir(events_root):
                 if event_path[-4:] == ".npy":
                     event_data = np.load(f"{events_root}/{event_path}").astype(np.float32)
-                    event_data = torch.from_numpy(event_data).float()
-                    if event_data.shape[0] > data.shape[0] // 2:
-                        event_data = torch.chunk(
-                            input=event_data,
-                            chunks=math.ceil(event_data.shape[0] * 2 / data.shape[0]),
-                            dim=0,
-                        )
                     event_name = "_".join(event_path.split("_")[1:])[:-4]
-                    ind = self.classes.index(event_name)
-                    events_list.append(
-                        {
-                            # "filename": event_path.replace("npy", "wav"),
-                             # "event_label": event_name,
-                             "event_id": ind,
-                             "data": event_data,
-                        },
-                    )
-                    # events_df = pd.DataFrame.from_dict(events_data_list)
-                elif event_path[-4:] == ".tsv":
-                    pass
-                    # events_data_df= pd.DataFrame.from_dict(events_data_list)
-                    # event_duration_df = pd.read_csv(events_root / event_path, sep="\t")
-                    # events_df = pd.merge(events_data_df, event_duration_df, on="filename")
-                    #
-                    # events_df.duration = (events_df.duration * self.n_frames_per_sec).astype(int)
-        if self.use_events or self.use_bg:
-            if self.use_bg:
-                return data, events_list, bg_data
-            return data, events_list
-        else:
-            return data
+                    event_id = self.classes.index(event_name)
+                    if event_id not in events_dict:
+                        events_dict[event_id] = []
+                    events_dict[event_id].append(event_data)
+        return events_dict
+
+    def concat_data(self, events_dict, n_class, bg=None, T=625, F=128, ptr=4):
+        events_data = np.zeros((T, F))
+        gen_data = [None]*len(events_dict)
+        lens = [None]*len(events_dict)
+        for i, id in enumerate(events_dict.keys()):
+            random.shuffle(events_dict[id])
+            for event in events_dict[id]:
+                if gen_data[i] is None:
+                    gen_data[i] = event
+                else:
+                    gen_data[i] = np.concatenate([gen_data[i], event], axis=0)
+            lens[i] = len(gen_data[i])
+
+        print(gen_data)
+
+
+        return gen_data
+
+    def _get_sample(self, filename):
+        data = np.load(self.data_dir / filename.replace("wav", "npy")).astype(np.float32)
+        return data
 
 
     def _get_label(self, filename):
@@ -276,11 +262,6 @@ class SEDDataset(Dataset):
                         self.offset[self.filenames[i]] = temp_offset * self.n_frames_per_sec
 
         self.filenames = np.delete(self.filenames, del_ids)
-        # temp = self.filenames
-        # self.filenames = np.delete(self.filenames, del_ids)
-        # missing_files = np.setdiff1d(temp, self.filenames)
-        # missing_unlabel = pd.DataFrame(data=missing_files, index=None, columns=['filename'])
-        # missing_unlabel.to_csv('/data2/syx/missing_validation.csv', index=False)
 
 
     def _get_sample(self, filename):
