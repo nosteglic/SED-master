@@ -33,6 +33,10 @@ def cycle_iteration(iterable):
         for i in iterable:
             yield i
 
+def calculate_similarity(M):
+    M = M / torch.linalg.vector_norm(M, dim=2, keepdim=True)
+    # return torch.sigmoid(torch.bmm(M, M.permute(0,2,1)))
+    return torch.bmm(M, M.permute(0,2,1))
 
 @dataclasses.dataclass
 class MeanTeacherTrainerOptions:
@@ -216,11 +220,7 @@ class MeanTeacherTrainer(object):
         bg_batch = None
 
         if self.use_events:
-            if not self.use_bg:
-                [sample_sync, sample_sync_ema, target_sync, ids_sync], events_batch = next(self.train_iter_sync)
-            else:
-                [sample_sync, sample_sync_ema, target_sync, ids_sync], events_batch, bg_batch = next(self.train_iter_sync)
-                bg_batch = bg_batch[0]
+            sample_sync, sample_sync_ema, target_sync, sample_event, sample_event_ema, target_event, len_event = next(self.train_iter_sync)
         else:
             sample_sync, sample_sync_ema, target_sync, ids_sync = next(self.train_iter_sync)
         # sample_sync - (12, 1, 625, 128)
@@ -234,6 +234,12 @@ class MeanTeacherTrainer(object):
             sample_sync, sample_sync_ema, target_sync = self.mixup(
                 sample_sync, sample_sync_ema, target_sync
             )
+
+            if self.use_events:
+                sample_event, sample_event_ema, target_event = self.mixup(
+                    sample_event, sample_event_ema, target_event
+                )
+
             sample_real_weak, sample_real_weak_ema, target_real_weak = self.mixup(
                 sample_real_weak, sample_real_weak_ema, target_real_weak
             )
@@ -245,6 +251,18 @@ class MeanTeacherTrainer(object):
             sample_sync.to(self.device),
             sample_sync_ema.to(self.device),
         )
+
+        target_sync = target_sync.to(self.device)
+        target_real_weak = target_real_weak.max(dim=1)[0].to(self.device)
+
+        if self.use_events:
+            sample_event, sample_event_ema = (
+                sample_event.to(self.device),
+                sample_event_ema.to(self.device),
+            )
+            target_event = target_event.to(self.device)
+            target_sync = torch.cat([target_sync, target_event], dim=0)
+
         sample_real_weak, sample_real_weak_ema = (
             sample_real_weak.to(self.device),
             sample_real_weak_ema.to(self.device)
@@ -253,22 +271,17 @@ class MeanTeacherTrainer(object):
             sample_real_unlabel.to(self.device),
             sample_real_unlabel_ema.to(self.device)
         )
-        target_sync = target_sync.to(self.device)
-        target_real_weak = target_real_weak.max(dim=1)[0].to(self.device)
 
         rampup_value = ramps.exp_rampup(self.forward_count, self.options.rampup_length)
         consistency_cost = self.max_consistency_cost * rampup_value
         with torch.no_grad():
-            output_ema_sync = self.ema_model(sample_sync, events=events_batch, bg=bg_batch)
+            output_ema_sync = self.ema_model(sample_sync, events = sample_event)
             output_ema_weak = self.ema_model(sample_real_weak)
             output_ema_unlabel = self.ema_model(sample_real_unlabel)
 
-        output_sync = self.model(sample_sync, events=events_batch, bg=bg_batch)
+        output_sync = self.model(sample_sync, events = sample_event)
         output_weak = self.model(sample_real_weak)
         output_unlabel = self.model(sample_real_unlabel)
-
-        if self.use_events:
-            target_sync = torch.cat([target_sync, output_sync['events_y']], dim=0)
 
         # compute classification loss
         loss_cls_strong = self.loss_cls(output_sync["strong"], target_sync)
@@ -290,12 +303,13 @@ class MeanTeacherTrainer(object):
         ) / 3
 
         if self.use_events:
-            mat_label = torch.bmm(output_sync["events_y"], output_sync["events_y"].permute(0, 2, 1))
-            events_len = output_sync["events_len"]
+            mat_label = torch.bmm(target_event, target_event.permute(0, 2, 1))
+            mat_feat = calculate_similarity(output_sync['events'])
+            len_event = len_event[0].tolist()
             for i in range(mat_label.shape[0]):
-                mat_label[i, events_len[i]:, events_len[i]:]=1
+                mat_label[i, len_event[i]:, len_event[i]:]=1
             loss_event = self.loss_cls(
-                output_sync["events_x"],
+                mat_feat,
                 mat_label
             )
             # loss_event = 0

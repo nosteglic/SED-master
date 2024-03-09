@@ -3,7 +3,6 @@ import warnings
 import torch
 import torch.nn as nn
 from models.baseline_model import CNN, BiGRU
-from models.concat_data import concat_data1, calculate_similarity
 
 class SEDModel(nn.Module):
     def __init__(self,
@@ -33,20 +32,9 @@ class SEDModel(nn.Module):
 
         self.reset_parameters()
 
-    def forward(self, x, events=None, bg=None): # x (bs, chan, frames, freqs) - (12, 1, 625, 128)
-        x_batch = x.shape[0]
+    def forward(self, x, events=None): # x (bs, chan, frames, freqs) - (12, 1, 625, 128)
         if events is not None:
-            events_x, events_y, events_len = concat_data1(
-                events,
-                n_class=self.n_class,
-                gen_count=self.gen_count,
-                T=x.shape[-2],
-                F=x.shape[-1],
-                ptr=self.ptr,
-                bg=bg,
-            )
-
-            x = torch.cat([x, events_x], dim=0)
+            x = torch.cat([x, events], dim=0)
 
         x = self.cnn(x) # x - (12, 128, 156, 1)
         bs, chan, frames, freq = x.size()
@@ -79,9 +67,7 @@ class SEDModel(nn.Module):
             return {
                 "strong": strong,
                 "weak": weak,
-                "events_x": calculate_similarity(x[x_batch:,:,:]),
-                "events_y": events_y,
-                "events_len": events_len
+                "events": x[events.shape[0]:, :, :],
             }
         return {"strong": strong, "weak": weak}
 

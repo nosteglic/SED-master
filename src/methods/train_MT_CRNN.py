@@ -264,25 +264,14 @@ def main(args):
     if cfg["ngpu"] > 1:
         batch_size *= cfg["ngpu"]
 
-    if use_events:
-        loader_train_sync = DataLoader(
-            train_sync_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=cfg["num_workers"],
-            drop_last=True,
-            pin_memory=True,
-            collate_fn=my_collate,
-        )
-    else:
-        loader_train_sync = DataLoader(
-            train_sync_dataset,
-            batch_size=cfg["batch_size_sync"],
-            shuffle=True,
-            num_workers=cfg["num_workers"],
-            drop_last=True,
-            pin_memory=True,
-        )
+    loader_train_sync = DataLoader(
+        train_sync_dataset,
+        batch_size=cfg["batch_size_sync"],
+        shuffle=True,
+        num_workers=cfg["num_workers"],
+        drop_last=True,
+        pin_memory=True,
+    )
     loader_train_real_weak = DataLoader(
         train_weak_dataset,
         batch_size=batch_size,
