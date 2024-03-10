@@ -11,7 +11,7 @@ import os
 
 os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
 os.environ["WANDB_MODE"] = 'offline'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -139,7 +139,7 @@ def main(args):
     shutil.copy(args.config, (exp_path / "config.yaml"))
     shutil.copy("src/methods/trainer_MT.py", (exp_path / "trainer.py"))
     shutil.copy("src/methods/train_MT_CRNN.py", (exp_path / "train.py"))
-    shutil.copy("src/models/concat_data.py", (exp_path / "concat_data.py"))
+    shutil.copy("src/dataset.py", (exp_path / "dataset.py"))
     shutil.copy("src/models/CRNN.py", (exp_path / "CRNN.py"))
 
 
