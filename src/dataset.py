@@ -80,10 +80,11 @@ class SEDDataset_synth(Dataset):
             events_data, events_label, events_len = self.concat_data(
                 events_dict,
                 n_class=len(self.classes),
-                bg=bg_data,
                 T=data.shape[0],
                 F=data.shape[1]
             )
+            if bg_data is not None:
+                events_data = events_data + bg_data
 
         if self.transforms is not None:
             data, label = self.transforms((data, label))
@@ -177,7 +178,7 @@ class SEDDataset_synth(Dataset):
 
         return events_list
 
-    def concat_data(self, events_dict, n_class, bg=None, T=625, F=128):
+    def concat_data(self, events_dict, n_class, T=625, F=128):
         events_label = np.zeros((T, n_class))
         events_data = np.zeros((T, F))
         events_len = [0] * self.gen_count
@@ -204,9 +205,6 @@ class SEDDataset_synth(Dataset):
                 if onset >= T:
                     break
             events_len[count] = onset
-
-        if bg is not None:
-            events_data = events_data + bg[:,:T,:]
 
         return events_data, events_label, events_len
 
