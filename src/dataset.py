@@ -89,6 +89,8 @@ class SEDDataset_synth(Dataset):
             data, label = self.transforms((data, label))
             if self.use_events:
                 events_data, events_label = self.transforms((events_data, events_label))
+                events_label = events_label[self.ptr // 2:: self.ptr, :]
+                events_len = [(i - self.ptr // 2) // self.ptr + 1 for i in events_len]
             # data - 0 - (625, 128)
             # data - 1 - (625, 128)
             # label - (625, 10)
@@ -96,8 +98,6 @@ class SEDDataset_synth(Dataset):
         # label pooling here because data augmentation may handle label (e.g. time shifting)
         # select center frame as a pooled label
         label = label[self.ptr // 2 :: self.ptr, :] # label - (156, 10)
-        events_label = events_label[self.ptr // 2 :: self.ptr, :]
-        events_len = [(i - self.ptr // 2) // self.ptr + 1 for i in events_len]
 
         # Return twice data with different augmentation if use mean teacher training
         if not self.twice_data:
