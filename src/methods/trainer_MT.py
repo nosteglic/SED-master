@@ -38,6 +38,12 @@ def calculate_similarity(M):
     # return torch.sigmoid(torch.bmm(M, M.permute(0,2,1)))
     return torch.bmm(M, M.permute(0,2,1))
 
+def calculate_similarity_ema(M1, M2):
+    M1 = M1 / torch.linalg.vector_norm(M1, dim=2, keepdim=True)
+    M2 = M2 / torch.linalg.vector_norm(M2, dim=2, keepdim=True)
+    return torch.sigmoid(torch.bmm(M1, M2.permute(0,2,1)))
+    # return torch.bmm(M1, M2.permute(0,2,1))
+
 @dataclasses.dataclass
 class MeanTeacherTrainerOptions:
     accum_grad: int = 1
@@ -305,6 +311,7 @@ class MeanTeacherTrainer(object):
         if self.use_events:
             mat_label = torch.bmm(target_event, target_event.permute(0, 2, 1))
             mat_feat = calculate_similarity(output_sync['events'])
+            # mat_feat = calculate_similarity_ema(output_sync['events'], output_ema_sync['events'])
             len_event = len_event[0].tolist()
             for i in range(mat_label.shape[0]):
                 mat_label[i, len_event[i]:, len_event[i]:]=1
@@ -330,7 +337,7 @@ class MeanTeacherTrainer(object):
             if self.use_events:
                 if not os.path.exists(f"figs/{self.model_name}"):
                     os.makedirs(f"figs/{self.model_name}", exist_ok=True)
-                plt.matshow(output_sync["events_x"][0].detach().cpu().numpy())
+                plt.matshow(mat_feat[0].detach().cpu().numpy())
                 plt.colorbar()
                 plt.savefig(f"figs/{self.model_name}/feature-{self.forward_count}.png")
                 plt.matshow(mat_label[0].cpu().numpy())
