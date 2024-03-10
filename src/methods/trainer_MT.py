@@ -222,13 +222,14 @@ class MeanTeacherTrainer(object):
         '''
         load data
         '''
-        events_batch = None
-        bg_batch = None
-
         if self.use_events:
             sample_sync, sample_sync_ema, target_sync, sample_event, sample_event_ema, target_event, len_event = next(self.train_iter_sync)
         else:
             sample_sync, sample_sync_ema, target_sync, ids_sync = next(self.train_iter_sync)
+            sample_event = None
+            sample_event_ema = None
+            target_event = None
+            len_event = None
         # sample_sync - (12, 1, 625, 128)
         # sample_sync_ema - (12, 1, 625, 128)
         # target_sync - (12, 156, 10)
