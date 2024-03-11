@@ -161,7 +161,7 @@ def main(args):
 
     feat_dir = Path(f"{data_root}/features/{feat_root}")
 
-    if Path(f"stats/stats_CRNN.npz").exists():
+    if Path("stats/stats_CRNN.npz").exists():
         shutil.copy("stats/stats_CRNN.npz", f"{exp_path}/stats.npz")
 
     # collect dataset stats
@@ -177,11 +177,12 @@ def main(args):
         train_sync_dataset = SEDDataset_synth(train_sync_df, data_dir=(feat_dir / "train/synthetic"), use_events = False, **kwargs_dataset)
         train_weak_dataset = SEDDataset(train_weak_df, data_dir=(feat_dir / "train/weak"), **kwargs_dataset)
         train_unlabel_dataset = SEDDataset(train_unlabel_df, data_dir=(feat_dir / "train/unlabel_in_domain"), **kwargs_dataset)
+
         stats = collect_stats(
             [train_sync_dataset, train_weak_dataset, train_unlabel_dataset],
             f"{exp_path}/stats.npz",
         )
-
+        shutil.copy(f"{exp_path}/stats.npz", "stats/stats_CRNN.npz")
 
     norm_dict_params = {
         "mean": stats["mean"],

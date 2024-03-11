@@ -10,8 +10,8 @@ import math
 import os
 
 os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
-os.environ["WANDB_MODE"] = 'offline' # online offline
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ["WANDB_MODE"] = 'offline'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,15 +34,7 @@ from dataset import SEDDataset, SEDDataset_synth
 from models.sed_model import SEDModel
 from trainer_MT import MeanTeacherTrainer, MeanTeacherTrainerOptions
 from transforms import ApplyLog, Compose, get_transforms
-from torch.utils.data._utils.collate import default_collate
 
-def my_collate(batch):
-    transposed = zip(*batch)
-    transposed_split = [q for q in transposed]
-    original_part = zip(*transposed_split[0])
-    original_result = [default_collate(samples) for samples in original_part]
-    events_batch = transposed_split[1]
-    return original_result, events_batch
 
 def collect_stats(datasets, save_path):
     """Compute dataset statistics
@@ -57,6 +49,7 @@ def collect_stats(datasets, save_path):
     stats = {}
     for dataset in datasets:
         dataloader = DataLoader(dataset, batch_size=1)
+
         for x, _, _ in tqdm(dataloader):
             if len(stats) == 0:
                 stats["mean"] = np.zeros(x.size(-1))
@@ -132,6 +125,8 @@ def main(args):
     shutil.copy(args.config, (exp_path / "config.yaml"))
     shutil.copy("src/methods/trainer_MT.py", (exp_path / "trainer.py"))
     shutil.copy("src/methods/train_MT.py", (exp_path / "train.py"))
+    shutil.copy("src/dataset.py", (exp_path / "dataset.py"))
+    shutil.copy("src/models/sed_model.py", (exp_path / "Conformer.py"))
 
     # get config
     data_root = cfg["data_root"]
@@ -165,7 +160,9 @@ def main(args):
                 f"n_fft{feat_cfg['mel_spec']['n_fft']}_hop_size{feat_cfg['mel_spec']['hop_size']}"
 
     feat_dir = Path(f"{data_root}/features/{feat_root}")
-    event_dir = Path(f"{data_root}/feature_raw/{feat_root}")
+
+    if Path("stats/stats_Conformer.npz").exists():
+        shutil.copy("stats/stats_Conformer.npz", f"{exp_path}/stats.npz")
 
     # collect dataset stats
     if Path(f"{exp_path}/stats.npz").exists():
@@ -185,7 +182,7 @@ def main(args):
             [train_sync_dataset, train_weak_dataset, train_unlabel_dataset],
             f"{exp_path}/stats.npz",
         )
-
+        shutil.copy(f"{exp_path}/stats.npz", "stats/stats_Conformer.npz")
 
     norm_dict_params = {
         "mean": stats["mean"],
@@ -209,6 +206,7 @@ def main(args):
     )
 
     use_events = cfg["use_events"]
+    use_bg = cfg['use_bg']
     train_sync_dataset = SEDDataset_synth(
         train_sync_df,
         data_dir=(feat_dir / "train/synthetic"),
@@ -217,8 +215,7 @@ def main(args):
         transforms=train_transforms,
         twice_data=True,
         use_events = use_events,
-        event_dir=event_dir,
-        n_frames_per_sec = n_frames_per_sec,
+        use_bg = use_bg,
         classes = classes,
     )
     train_weak_dataset = SEDDataset(
@@ -244,31 +241,23 @@ def main(args):
         encode_function=encode_function,
         pooling_time_ratio=cfg["pooling_time_ratio"],
         transforms=test_transforms,
+        n_frames_per_sec=n_frames_per_sec,
+        is_valid=True,
     )
 
     batch_size = cfg["batch_size"]
+    batch_size_sync = cfg["batch_size_sync"]
     if cfg["ngpu"] > 1:
         batch_size *= cfg["ngpu"]
 
-    if use_events:
-        loader_train_sync = DataLoader(
-            train_sync_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=cfg["num_workers"],
-            drop_last=True,
-            pin_memory=True,
-            collate_fn=my_collate,
-        )
-    else:
-        loader_train_sync = DataLoader(
-            train_sync_dataset,
-            batch_size=cfg["batch_size_sync"],
-            shuffle=True,
-            num_workers=cfg["num_workers"],
-            drop_last=True,
-            pin_memory=True,
-        )
+    loader_train_sync = DataLoader(
+        train_sync_dataset,
+        batch_size=batch_size_sync,
+        shuffle=True,
+        num_workers=cfg["num_workers"],
+        drop_last=True,
+        pin_memory=True,
+    )
     loader_train_real_weak = DataLoader(
         train_weak_dataset,
         batch_size=batch_size,
@@ -356,6 +345,7 @@ def main(args):
         resume=cfg["resume"],
         trainer_options=trainer_options,
         use_events=use_events,
+        use_bg=use_bg,
     )
 
     trainer.run()
