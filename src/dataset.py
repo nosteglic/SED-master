@@ -132,7 +132,6 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(data[0]).float().unsqueeze(0),
                     torch.from_numpy(data[1]).float().unsqueeze(0),
                     torch.from_numpy(label).float(),
-                    torch.from_numpy(events_label).float(),
                     data_id,
                 )
 
