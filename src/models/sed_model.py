@@ -1,9 +1,9 @@
+import warnings
+
 import torch
 
 from models.baseline_model import CNN
 from models.conformer.conformer_encoder import ConformerEncoder
-
-from models.concat_data import concat_data1, calculate_similarity
 
 class SEDModel(torch.nn.Module):
     def __init__(
@@ -41,22 +41,20 @@ class SEDModel(torch.nn.Module):
         self.reset_parameters(layer_init)
 
     def forward(self, x, events=None, mask=None):
-        x_batch = x.shape[0]
         if events is not None:
-            events_x, events_y, events_len = concat_data1(
-                events,
-                n_class=self.n_class,
-                gen_count=self.gen_count,
-                T=x.shape[-2],
-                F=x.shape[-1],
-                ptr=self.ptr,
+            x = torch.cat([x, events], dim=0)
+
+        x = self.cnn(x) # x - (32, 64, --, 1)
+        bs, chan, frames, freq = x.size()
+        if freq != 1:
+            warnings.warn(
+                f"Output shape is: {(bs, frames, chan * freq)}, from {freq} staying freq"
             )
-
-            x = torch.cat([x, events_x], dim=0)
-
-        # input
-        x = self.cnn(x)
-        x = x.squeeze(-1).permute(0, 2, 1)
+            x = x.permute(0, 2, 1, 3)
+            x = x.contiguous().view(bs, frames, chan * freq)
+        else:
+            x = x.squeeze(-1) # x - (12, 128, 156)
+            x = x.permute(0, 2, 1) # x - [bs, frames, chan] - (12, 156, 128)
 
         if self.pooling == "token":
             tag_token = self.linear_emb(torch.ones(x.size(0), 1, 1).cuda())
@@ -84,9 +82,7 @@ class SEDModel(torch.nn.Module):
             return {
                 "strong": strong,
                 "weak": weak,
-                "events_x": calculate_similarity(x[x_batch:,1:,:]),
-                "events_y": events_y,
-                "events_len": events_len
+                "events": x[events.shape[0] + 1:, :, :],
             }
         return {"strong": strong, "weak": weak}
 
