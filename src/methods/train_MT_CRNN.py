@@ -11,7 +11,7 @@ import os
 
 os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
 os.environ["WANDB_MODE"] = 'offline'
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,21 +34,7 @@ from dataset import SEDDataset, SEDDataset_synth
 from models.CRNN import SEDModel
 from trainer_MT import MeanTeacherTrainer, MeanTeacherTrainerOptions
 from transforms import ApplyLog, Compose, get_transforms
-from torch.utils.data._utils.collate import default_collate
 
-def my_collate(batch):
-    transposed = zip(*batch)
-    transposed_split = [q for q in transposed]
-
-    original_part = zip(*transposed_split[0])
-    original_result = [default_collate(samples) for samples in original_part]
-
-    # events_batch = [transposed_split[1]]
-    events_batch = transposed_split[1]
-    if len(transposed_split) == 3:
-        bg_batch = [default_collate(samples) for samples in zip(*transposed_split[2])]
-        return original_result, events_batch, bg_batch
-    return original_result, events_batch
 
 def collect_stats(datasets, save_path):
     """Compute dataset statistics
@@ -141,8 +127,6 @@ def main(args):
     shutil.copy("src/methods/train_MT_CRNN.py", (exp_path / "train.py"))
     shutil.copy("src/dataset.py", (exp_path / "dataset.py"))
     shutil.copy("src/models/CRNN.py", (exp_path / "CRNN.py"))
-
-
 
     # get config
     data_root = cfg["data_root"]
@@ -261,12 +245,13 @@ def main(args):
     )
 
     batch_size = cfg["batch_size"]
+    batch_size_sync = cfg["batch_size_sync"]
     if cfg["ngpu"] > 1:
         batch_size *= cfg["ngpu"]
 
     loader_train_sync = DataLoader(
         train_sync_dataset,
-        batch_size=cfg["batch_size_sync"],
+        batch_size=batch_size_sync,
         shuffle=True,
         num_workers=cfg["num_workers"],
         drop_last=True,

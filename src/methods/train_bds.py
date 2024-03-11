@@ -11,7 +11,7 @@ import os
 
 os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
 os.environ["WANDB_MODE"] = 'offline'
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from baseline_utils.ManyHotEncoder import ManyHotEncoder
-from dataset import SEDDataset
+from dataset import SEDDataset, SEDDataset_synth
 from models.CRNN import SEDModel
 from trainer_bds import MTBGTrainer, MTBGTrainerOptions
 from transforms import ApplyLog, Compose, get_transforms
@@ -125,9 +125,8 @@ def main(args):
     shutil.copy(args.config, (exp_path / "config.yaml"))
     shutil.copy("src/methods/trainer_bds.py", (exp_path / "trainer.py"))
     shutil.copy("src/methods/train_bds.py", (exp_path / "train.py"))
+    shutil.copy("src/dataset.py", (exp_path / "dataset.py"))
     shutil.copy("src/models/CRNN.py", (exp_path / "CRNN.py"))
-
-
 
     # get config
     data_root = cfg["data_root"]
@@ -175,7 +174,7 @@ def main(args):
             "encode_function": encode_function,
             "transforms": Compose([ApplyLog()]),
         }
-        train_sync_dataset = SEDDataset(train_sync_df, data_dir=(feat_dir / "train/synthetic"), **kwargs_dataset)
+        train_sync_dataset = SEDDataset_synth(train_sync_df, data_dir=(feat_dir / "train/synthetic"), use_events = False, **kwargs_dataset)
         train_weak_dataset = SEDDataset(train_weak_df, data_dir=(feat_dir / "train/weak"), **kwargs_dataset)
         train_unlabel_dataset = SEDDataset(train_unlabel_df, data_dir=(feat_dir / "train/unlabel_in_domain"), **kwargs_dataset)
         stats = collect_stats(
@@ -205,7 +204,7 @@ def main(args):
         prob=0.0,
     )
 
-    train_sync_dataset = SEDDataset(
+    train_sync_dataset = SEDDataset_synth(
         train_sync_df,
         data_dir=(feat_dir / "train/synthetic"),
         encode_function=encode_function,
