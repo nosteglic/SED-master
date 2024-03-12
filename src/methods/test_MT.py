@@ -5,6 +5,7 @@
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
 import argparse
+import ast
 import logging
 import math
 import os
@@ -45,8 +46,8 @@ def parse_args(args):
     parser.add_argument("--exp_name", type=str, help="exp name used for the training")
     parser.add_argument("--debugmode", default=True, action="store_true", help="Debugmode")
     parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
-    parser.add_argument("--on_test", default=True, action="store_true", help="Choose validation or eval/public datasets")
-    parser.add_argument("--revalid", default=False, action="store_true", help="Revalid parameters")
+    parser.add_argument("--on_test", default=True, help="Choose validation or eval/public datasets")
+    parser.add_argument("--revalid", default=False, help="Revalid parameters")
     parser.add_argument("--mode", type=str, default="score", help="Model uses best score or best loss or best psds")
 
     return parser.parse_args(args)
@@ -67,6 +68,8 @@ def valid(model, valid_loader, exp_path, options):
 
 def main(args):
     args = parse_args(args)
+    args.revalid = ast.literal_eval(args.revalid)
+    args.on_test = ast.literal_eval(args.on_test)
     if args.revalid:
         args.on_test = False
 
