@@ -9,19 +9,6 @@ import math
 import random
 
 
-
-
-# def encode_duration_df(events_df, labels):
-#     if type(labels) in [np.ndarray, np.array]:
-#         labels = labels.tolist()
-#     for i, row in events_df.iterrows():
-#         y = np.zeros((row.duration, len(labels)))
-#         ind = labels.index(row.event_label)
-#         y[:, ind] = 1
-#
-#     return events_df
-
-
 class SEDDataset_synth(Dataset):
     def __init__(
         self,
@@ -85,6 +72,7 @@ class SEDDataset_synth(Dataset):
             )
             if bg_data is not None:
                 events_data = events_data + bg_data
+
 
         if self.transforms is not None:
             data, label = self.transforms((data, label))
@@ -181,13 +169,19 @@ class SEDDataset_synth(Dataset):
         events_label = np.zeros((T, n_class))
         events_data = np.zeros((T, F))
         events_len = [0] * self.gen_count
+        split_len = 0
+        choice_data = None
         for count in range(self.gen_count):
             random.shuffle(events_dict)
             onset = 0
             offset = 0
+            mini_data = []
+            mini_len = 50
             for i, data in enumerate(events_dict):
                 split_len = T - offset - 1
                 if split_len < 50:
+                    # max: 80.81
+                    # min: 0.05
                     break
                 if type(data['data']) in [np.ndarray, np.array]:
                     choice_data = data['data'][:split_len, :]
@@ -197,6 +191,14 @@ class SEDDataset_synth(Dataset):
                         choice_data = np.concatenate(data['data'], axis=0)[split_onset:split_onset+split_len, :]
                     else:
                         choice_data = random.choice(data['data'])[:split_len, :]
+                if choice_data.shape[0] < mini_len:
+                    mini_len = choice_data.shape[0]
+                    mini_data.append(
+                        {
+                            "id": data['id'],
+                            'data': choice_data
+                        }
+                    )
                 offset = choice_data.shape[0] + onset - 1
                 events_label[onset:offset+1,data['id']] = 1
                 events_data[onset:offset+1, :] = choice_data
@@ -204,6 +206,16 @@ class SEDDataset_synth(Dataset):
                 if onset >= T:
                     break
             events_len[count] = onset
+            split_len = T - onset
+            while split_len > 0:
+                choice_dict = random.choice(mini_data)
+                choice_data = choice_dict['data'][: split_len,:]
+                offset = choice_data.shape[0]+onset-1
+                events_label[onset:offset + 1, choice_dict['id']] = 1
+                events_data[onset:offset + 1, :] = choice_data
+                onset = offset + 1
+                split_len = T - onset
+
 
         return events_data, events_label, events_len
 
