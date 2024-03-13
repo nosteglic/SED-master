@@ -64,7 +64,7 @@ class SEDDataset_synth(Dataset):
             bg_data = None
         if self.use_events:
             events_dict = self._get_events(data_id, max_len=data.shape[0])
-            events_data, events_label, events_len = self.concat_data(
+            events_data, events_label = self.concat_data(
                 events_dict,
                 n_class=len(self.classes),
                 T=data.shape[0],
@@ -79,7 +79,6 @@ class SEDDataset_synth(Dataset):
             if self.use_events:
                 events_data, events_label = self.transforms((events_data, events_label))
                 events_label = events_label[self.ptr // 2:: self.ptr, :]
-                events_len = [(i - self.ptr // 2) // self.ptr + 1 for i in events_len]
             # data - 0 - (625, 128)
             # data - 1 - (625, 128)
             # label - (625, 10)
@@ -96,7 +95,6 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(label).float(),
                     torch.from_numpy(events_data).float().unsqueeze(0),
                     torch.from_numpy(events_label).float().unsqueeze(0),
-                    events_len
                 )
             else:
                 return (
@@ -113,7 +111,6 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(events_data[0]).float().unsqueeze(0),
                     torch.from_numpy(events_data[1]).float().unsqueeze(0),
                     torch.from_numpy(events_label).float(),
-                    events_len
                 )
             else:
                 return (
@@ -169,17 +166,16 @@ class SEDDataset_synth(Dataset):
         events_label = np.zeros((T, n_class))
         events_data = np.zeros((T, F))
         events_len = [0] * self.gen_count
-        split_len = 0
         choice_data = None
         for count in range(self.gen_count):
             random.shuffle(events_dict)
             onset = 0
             offset = 0
             mini_data = []
-            mini_len = 50
+            mini_len = T * 1.5 / 10
             for i, data in enumerate(events_dict):
                 split_len = T - offset - 1
-                if split_len < 50:
+                if split_len < T * 1.5 / 10:
                     # max: 80.81
                     # min: 0.05
                     break
@@ -205,9 +201,8 @@ class SEDDataset_synth(Dataset):
                 onset = offset + 1
                 if onset >= T:
                     break
-            events_len[count] = onset
             split_len = T - onset
-            while split_len > 0:
+            while split_len > 0 and len(mini_data) != 0:
                 choice_dict = random.choice(mini_data)
                 choice_data = choice_dict['data'][: split_len,:]
                 offset = choice_data.shape[0]+onset-1
@@ -217,7 +212,7 @@ class SEDDataset_synth(Dataset):
                 split_len = T - onset
 
 
-        return events_data, events_label, events_len
+        return events_data, events_label
 
     def _get_sample(self, filename):
         data = np.load(self.data_dir / filename.replace("wav", "npy")).astype(np.float32)

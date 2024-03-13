@@ -87,21 +87,29 @@ def parse_args(args):
     parser.add_argument("--model_type", type=str, default="CRNN")
     parser.add_argument("--batch_size", type=int, default=12)
     parser.add_argument("--batch_size_sync", type=int, default=12)
-    parser.add_argument("--use_events", type=str, default="True")
-    parser.add_argument("--use_bg", type=str, default="False")
-    parser.add_argument("--use_sigmoid", type=str, default="False")
-    parser.add_argument("--use_mixup", type=str, default="False")
-    parser.add_argument("--beta", type=float, default=0.)
+    parser.add_argument("--use_events", type=int, default=1)
+    parser.add_argument("--use_bg", type=int, default=0)
+    parser.add_argument("--use_sigmoid", type=int)
+    parser.add_argument("--use_mixup", type=int, default=0)
+    parser.add_argument("--beta", type=float)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--debugmode", default=True, action="store_true", help="Debugmode")
+    parser.add_argument("--debugmode", type=int, default=1)
     parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
 
     return parser.parse_args(args)
 
+def convert_int_to_bool(x):
+    if x == 1:
+        return True
+    elif x == 0:
+        return False
+    else:
+        return None
 
 def main(args):
     args = parse_args(args)
     model_type = args.model_type
+
 
     config_yaml = f"config/dcase21_MT_{args.model_type}.yaml"
 
@@ -109,25 +117,25 @@ def main(args):
     with open(config_yaml) as f:
         cfg = yaml.safe_load(f)
 
-    cfg['batch_size'] = args.batch_size
-    cfg['batch_size_sync'] = args.batch_size_sync
-    cfg['use_events'] = args.use_events
-    cfg['use_bg'] = args.use_bg
-    cfg['use_sigmoid'] = args.use_sigmoid
-    cfg['use_mixup'] = args.use_mixup
-    cfg['beta'] = args.beta
-    cfg['seed'] = args.seed
-
     batch_size = args.batch_size
     batch_size_sync = args.batch_size_sync
-    use_events = ast.literal_eval(args.use_events)
-    use_bg = ast.literal_eval(args.use_bg)
-    use_sigmoid = ast.literal_eval(args.use_sigmoid)
-    use_mixup = ast.literal_eval(args.use_mixup)
+    use_events = convert_int_to_bool(args.use_events)
+    use_bg = convert_int_to_bool(args.use_bg)
+    use_sigmoid = convert_int_to_bool(args.use_sigmoid)
+    use_mixup = convert_int_to_bool(args.use_mixup)
     beta = args.beta
     seed = args.seed
+    debugmode = convert_int_to_bool(args.debugmode)
     seed_everything(seed)
 
+    cfg['batch_size'] = batch_size
+    cfg['batch_size_sync'] = batch_size_sync
+    cfg['use_events'] = use_events
+    cfg['use_bg'] = use_bg
+    cfg['use_sigmoid'] = use_sigmoid
+    cfg['use_mixup'] = use_mixup
+    cfg['beta'] = beta
+    cfg['seed'] = seed
 
     exp_name = f"{model_type}-b{str(batch_size)}-sync{str(batch_size_sync)}"
     if use_events:
@@ -142,7 +150,8 @@ def main(args):
             exp_name += "-mixup"
         else:
             exp_name += "-nomixup"
-        exp_name += f"-beta{str(beta)}"
+        if beta is not None or beta != "":
+            exp_name += f"-beta{str(beta)}"
     exp_name += f"-seed{str(seed)}"
 
     cfg["wandb"]["name"] = exp_name
@@ -174,7 +183,7 @@ def main(args):
     # if debug is true, enable to overwrite experiment
     if exp_path.exists():
         logging.warning(f"{exp_path} is already exist.")
-        if args.debugmode:
+        if debugmode:
             logging.warning("Note that experiment will be overwrite.")
         else:
             logging.info("Experiment is interrupted. Make sure exp_path will be unique.")

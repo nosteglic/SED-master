@@ -106,7 +106,7 @@ class MeanTeacherTrainer(object):
         use_bg = False,
         use_sigmoid=True,
         use_mixup=False,
-        beta=0,
+        beta=None,
     ):
         self.use_events = use_events
         self.use_bg = use_bg
@@ -230,7 +230,7 @@ class MeanTeacherTrainer(object):
         load data
         '''
         if self.use_events:
-            sample_sync, sample_sync_ema, target_sync, sample_event, sample_event_ema, target_event, len_event = next(self.train_iter_sync)
+            sample_sync, sample_sync_ema, target_sync, sample_event, sample_event_ema, target_event = next(self.train_iter_sync)
         else:
             sample_sync, sample_sync_ema, target_sync, ids_sync = next(self.train_iter_sync)
             sample_event = None
@@ -320,15 +320,15 @@ class MeanTeacherTrainer(object):
             mat_label = torch.bmm(target_event, target_event.permute(0, 2, 1))
             mat_feat = calculate_similarity(output_sync['events'], use_sigmoid=self.use_sigmoid)
             # mat_feat = calculate_similarity_ema(output_sync['events'], output_ema_sync['events'])
-            len_event = len_event[0].tolist()
-            for i in range(mat_label.shape[0]):
-                mat_label[i, len_event[i]:, len_event[i]:]=1
             loss_event = self.loss_cls(
                 mat_feat,
                 mat_label
             )
-            loss_total = ((1-self.beta) * (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong)
+            if self.beta is not None:
+                loss_total = ((1-self.beta) * (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong)
                           + self.beta * loss_event) / self.accum_grad
+            else:
+                loss_total = (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong + loss_event) / self.accum_grad
         else:
             loss_total = (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong) / self.accum_grad
         loss_total.backward()  # Backprop

@@ -11,14 +11,7 @@ wandb:
 data_root: /data2/syx/DCASE2021
 #data_root: /data_ssd1/syx/sed_data/DCASE2021
 
-use_events: True
-use_bg: False
-use_sigmoid: True
-use_mixup: False
-beta: 0.1
 gen_count: 1
-batch_size: 32
-batch_size_sync: 32
 resume:
 
 sync_meta: metadata/train/synthetic.tsv

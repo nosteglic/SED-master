@@ -39,14 +39,21 @@ def seed_everything(seed):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
+def convert_int_to_bool(x):
+    if x == 1:
+        return True
+    elif x == 0:
+        return False
+    else:
+        return None
 
 def parse_args(args):
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp_name", type=str, required=True)
-    parser.add_argument("--debugmode", default=True, action="store_true", help="Debugmode")
+    parser.add_argument("--debugmode", type=int)
     parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
-    parser.add_argument("--on_test", default=True, help="Choose validation or eval/public datasets")
-    parser.add_argument("--revalid", default=False, help="Revalid parameters")
+    parser.add_argument("--on_test", type=int, help="Choose validation or eval/public datasets")
+    parser.add_argument("--revalid", type=int, help="Revalid parameters")
     parser.add_argument("--mode", type=str, default="score", help="Model uses best score or best loss or best psds")
 
     return parser.parse_args(args)
@@ -67,8 +74,10 @@ def valid(model, valid_loader, exp_path, options):
 
 def main(args):
     args = parse_args(args)
-    args.revalid = ast.literal_eval(args.revalid)
-    args.on_test = ast.literal_eval(args.on_test)
+    args.revalid = convert_int_to_bool(args.revalid)
+    args.on_test = convert_int_to_bool(args.on_test)
+    args.debugmode =  convert_int_to_bool(args.debugmode)
+
     if args.revalid:
         args.on_test = False
 
