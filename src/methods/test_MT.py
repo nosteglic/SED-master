@@ -13,7 +13,6 @@ import pickle
 import random
 import sys
 from pathlib import Path
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
@@ -24,7 +23,8 @@ from torch.utils.data import DataLoader
 
 from baseline_utils.ManyHotEncoder import ManyHotEncoder
 from dataset import SEDDataset
-from models.sed_model import SEDModel
+from models.Conformer import SEDModel as Conformer
+from models.CRNN import SEDModel as CRNN
 from post_processing import PostProcess
 from trainer_MT import MeanTeacherTrainerOptions
 from transforms import get_transforms
@@ -42,8 +42,7 @@ def seed_everything(seed):
 
 def parse_args(args):
     parser = argparse.ArgumentParser()
-
-    parser.add_argument("--exp_name", type=str, help="exp name used for the training")
+    parser.add_argument("--exp_name", type=str, required=True)
     parser.add_argument("--debugmode", default=True, action="store_true", help="Debugmode")
     parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
     parser.add_argument("--on_test", default=True, help="Choose validation or eval/public datasets")
@@ -147,7 +146,6 @@ def main(args):
         pin_memory=True,
     )
 
-
     # logging info
     if args.verbose > 0:
         logging.basicConfig(
@@ -166,8 +164,17 @@ def main(args):
 
     seed_everything(int(cfg["seed"]))
 
-    model = SEDModel(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"],
-                     encoder_kwargs=cfg["model"]["encoder"])
+    if "model_type" in cfg:
+        model_type = cfg["model_type"]
+    else:
+        model_type = cfg["wandb"]["name"].split("-")[0]
+
+    if model_type == "Conformer":
+        model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
+                          encoder_kwargs=cfg["model"]["encoder"])
+    elif model_type == "CRNN":
+        model = CRNN(n_class=len(classes), attention=cfg["model"]["attention"], gen_count=cfg["gen_count"],
+                     cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"])
 
     if args.mode == "score":
         checkpoint = torch.load(exp_path / "model" / "model_best_score.pth")

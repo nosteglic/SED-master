@@ -11,6 +11,7 @@ class SEDModel(torch.nn.Module):
         n_class,
         cnn_kwargs=None,
         encoder_kwargs=None,
+        decoder_kwargs=None,
         gen_count=2,
         ptr=8,
         pooling="token",
@@ -82,7 +83,7 @@ class SEDModel(torch.nn.Module):
             return {
                 "strong": strong,
                 "weak": weak,
-                "events": x[events.shape[0] + 1:, :, :],
+                "events": x[events.shape[0]:, 1:, :],
             }
         return {"strong": strong, "weak": weak}
 

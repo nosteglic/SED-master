@@ -129,22 +129,22 @@ def recompute_feature_raw(cfg, need_recompute_feature, wav_dir, feat_dir, nj=1):
     else:
         logging.info(f"{feat_dir} is already exists, feature extraction is skipped.")
 
-def ext_synth(cfg, nj):
+def ext_synth(cfg, nj, nee_resample_wav, need_recompute_feature):
     wav_root = f"{cfg['data_root']}/audio"
     feat_root = f"{cfg['data_root']}/features"
     cfg = cfg["feature"]
     wav_dir = Path(f"{wav_root}/wav/sr{cfg['sample_rate']}")
 
-    resample_wav_synth(cfg=cfg, need_resample_wav=False, wav_root=wav_root, wav_dir=wav_dir, nj=nj)
+    resample_wav_synth(cfg=cfg, need_resample_wav=nee_resample_wav, wav_root=wav_root, wav_dir=wav_dir, nj=nj)
 
     feat_dir = Path(
         f"{feat_root}/sr{cfg['sample_rate']}"
         + f"_n_mels{cfg['mel_spec']['n_mels']}_n_fft{cfg['mel_spec']['n_fft']}_hop_size{cfg['mel_spec']['hop_size']}"
     )
-    recompute_feature_synth(cfg=cfg, need_recompute_feature=False, wav_dir=wav_dir, feat_dir=feat_dir, nj=nj)
+    recompute_feature_synth(cfg=cfg, need_recompute_feature=need_recompute_feature, wav_dir=wav_dir, feat_dir=feat_dir, nj=nj)
 
 
-def ext_raw(cfg, nj):
+def ext_raw(cfg, nj, nee_resample_wav, need_recompute_feature):
     super_root = os.path.split(cfg['data_root'])[0]
     # wav_root = f"{super_root}/sources_raw_targets"
     # feat_root = f"{cfg['data_root']}/feature_raw"
@@ -155,29 +155,35 @@ def ext_raw(cfg, nj):
     # wav_dir = Path(f"{super_root}/wav_raw/sr{cfg['sample_rate']}")
     wav_dir = Path(f"{super_root}/wav_raw_bg/sr{cfg['sample_rate']}")
 
-    resample_wav_raw(cfg=cfg, need_resample_wav=False, wav_root=wav_root, wav_dir=wav_dir, nj=nj)
+    resample_wav_raw(cfg=cfg, need_resample_wav=nee_resample_wav, wav_root=wav_root, wav_dir=wav_dir, nj=nj)
 
     feat_dir = Path(
         f"{feat_root}/sr{cfg['sample_rate']}"
         + f"_n_mels{cfg['mel_spec']['n_mels']}_n_fft{cfg['mel_spec']['n_fft']}_hop_size{cfg['mel_spec']['hop_size']}"
     )
-    recompute_feature_raw(cfg=cfg, need_recompute_feature=True, wav_dir=wav_dir, feat_dir=feat_dir, nj=nj)
+    recompute_feature_raw(cfg=cfg, need_recompute_feature=need_recompute_feature, wav_dir=wav_dir, feat_dir=feat_dir, nj=nj)
 
-
-
-def main():
+def parse_args(args):
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default='config/dcase21_MT_Conformer.yaml')
     parser.add_argument("--nj", type=int, default=1)
-    args = parser.parse_args()
+    parser.add_argument("--nee_resample_wav", type=bool, default=False)
+    parser.add_argument("--need_recompute_feature", type=bool, default=True)
+    parser.add_argument("--extract_type", default="raw")
+    return parser.parse_args(args)
+
+def main(args):
+    args = parse_args(args)
 
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f)
 
     nj = args.nj
+    nee_resample_wav = args.nee_resample_wav
+    need_recompute_feature = args.need_recompute_feature
     # ext_synth(cfg=cfg, nj=nj)
-    ext_raw(cfg=cfg, nj=nj)
-
-
-if __name__ == "__main__":
-    main()
+    ext_raw(
+        cfg=cfg,
+        nj=nj,
+        nee_resample_wav=nee_resample_wav,
+        need_recompute_feature=need_recompute_feature)

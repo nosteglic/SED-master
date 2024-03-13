@@ -33,9 +33,10 @@ def cycle_iteration(iterable):
         for i in iterable:
             yield i
 
-def calculate_similarity(M):
+def calculate_similarity(M, use_sigmoid=True):
     M = M / torch.linalg.vector_norm(M, dim=2, keepdim=True)
-    # return torch.sigmoid(torch.bmm(M, M.permute(0,2,1)))
+    if use_sigmoid:
+        return torch.sigmoid(torch.bmm(M, M.permute(0,2,1)))
     return torch.bmm(M, M.permute(0,2,1))
 
 def calculate_similarity_ema(M1, M2):
@@ -103,9 +104,15 @@ class MeanTeacherTrainer(object):
         trainer_options=None,
         use_events = False,
         use_bg = False,
+        use_sigmoid=True,
+        use_mixup=False,
+        beta=0,
     ):
         self.use_events = use_events
         self.use_bg = use_bg
+        self.use_sigmoid = use_sigmoid
+        self.use_mixup = use_mixup
+        self.beta = beta
         self.model_name = model_name
         self.model = model.cuda() if torch.cuda.is_available() else model
         self.ema_model = ema_model.cuda() if torch.cuda.is_available() else ema_model
@@ -242,7 +249,7 @@ class MeanTeacherTrainer(object):
                 sample_sync, sample_sync_ema, target_sync
             )
 
-            if self.use_events:
+            if self.use_events and self.use_mixup:
                 sample_event, sample_event_ema, target_event = self.mixup(
                     sample_event, sample_event_ema, target_event
                 )
@@ -311,7 +318,7 @@ class MeanTeacherTrainer(object):
 
         if self.use_events:
             mat_label = torch.bmm(target_event, target_event.permute(0, 2, 1))
-            mat_feat = calculate_similarity(output_sync['events'])
+            mat_feat = calculate_similarity(output_sync['events'], use_sigmoid=self.use_sigmoid)
             # mat_feat = calculate_similarity_ema(output_sync['events'], output_ema_sync['events'])
             len_event = len_event[0].tolist()
             for i in range(mat_label.shape[0]):
@@ -320,8 +327,8 @@ class MeanTeacherTrainer(object):
                 mat_feat,
                 mat_label
             )
-            # loss_event = 0
-            loss_total = (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong + loss_event) / self.accum_grad
+            loss_total = ((1-self.beta) * (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong)
+                          + self.beta * loss_event) / self.accum_grad
         else:
             loss_total = (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong) / self.accum_grad
         loss_total.backward()  # Backprop

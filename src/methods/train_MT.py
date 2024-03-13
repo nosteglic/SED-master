@@ -5,13 +5,14 @@
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
 import argparse
+import ast
 import logging
 import math
 import os
 
-os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
-os.environ["WANDB_MODE"] = 'offline'
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+# os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
+# os.environ["WANDB_MODE"] = 'offline'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,7 +32,8 @@ from tqdm import tqdm
 
 from baseline_utils.ManyHotEncoder import ManyHotEncoder
 from dataset import SEDDataset, SEDDataset_synth
-from models.sed_model import SEDModel
+from models.Conformer import SEDModel as Conformer
+from models.CRNN import SEDModel as CRNN
 from trainer_MT import MeanTeacherTrainer, MeanTeacherTrainerOptions
 from transforms import ApplyLog, Compose, get_transforms
 
@@ -82,7 +84,15 @@ def seed_everything(seed):
 
 def parse_args(args):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config/dcase21_MT_Conformer.yaml", type=str, help="Config file in yaml format")
+    parser.add_argument("--model_type", type=str, default="CRNN")
+    parser.add_argument("--batch_size", type=int, default=12)
+    parser.add_argument("--batch_size_sync", type=int, default=12)
+    parser.add_argument("--use_events", type=str, default="True")
+    parser.add_argument("--use_bg", type=str, default="False")
+    parser.add_argument("--use_sigmoid", type=str, default="False")
+    parser.add_argument("--use_mixup", type=str, default="False")
+    parser.add_argument("--beta", type=float, default=0.)
+    parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--debugmode", default=True, action="store_true", help="Debugmode")
     parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
 
@@ -91,20 +101,74 @@ def parse_args(args):
 
 def main(args):
     args = parse_args(args)
+    model_type = args.model_type
+
+    config_yaml = f"config/dcase21_MT_{args.model_type}.yaml"
 
     # load config
-    with open(args.config) as f:
+    with open(config_yaml) as f:
         cfg = yaml.safe_load(f)
 
-    seed_everything(int(cfg["seed"]))
+    cfg['batch_size'] = args.batch_size
+    cfg['batch_size_sync'] = args.batch_size_sync
+    cfg['use_events'] = args.use_events
+    cfg['use_bg'] = args.use_bg
+    cfg['use_sigmoid'] = args.use_sigmoid
+    cfg['use_mixup'] = args.use_mixup
+    cfg['beta'] = args.beta
+    cfg['seed'] = args.seed
 
-    model_name = cfg["wandb"]["name"]
-    model_name = model_name + "-" + cfg["seed"]
-    cfg["wandb"]["name"] = model_name
-    cfg["wandb"]["id"] = model_name
+    batch_size = args.batch_size
+    batch_size_sync = args.batch_size_sync
+    use_events = ast.literal_eval(args.use_events)
+    use_bg = ast.literal_eval(args.use_bg)
+    use_sigmoid = ast.literal_eval(args.use_sigmoid)
+    use_mixup = ast.literal_eval(args.use_mixup)
+    beta = args.beta
+    seed = args.seed
+    seed_everything(seed)
+
+
+    exp_name = f"{model_type}-b{str(batch_size)}-sync{str(batch_size_sync)}"
+    if use_events:
+        exp_name += "-concat"
+        if use_bg:
+            exp_name += "-bg"
+        if use_sigmoid:
+            exp_name += "-sigmoid"
+        else:
+            exp_name += "-nosigmoid"
+        if use_mixup:
+            exp_name += "-mixup"
+        else:
+            exp_name += "-nomixup"
+        exp_name += f"-beta{str(beta)}"
+    exp_name += f"-seed{str(seed)}"
+
+    cfg["wandb"]["name"] = exp_name
+    cfg["wandb"]["id"] = exp_name
+
+    prompt_str = f'''
+    *******Confirm your exp config*******
+    exp_name: {exp_name}
+    model_type: {model_type}
+    batch_size: {batch_size}
+    batch_size_sync: {batch_size_sync}
+    use_events? {use_events}
+    use_bg? {use_bg}
+    use_sigmoid? {use_sigmoid}
+    use_mixup? {use_mixup}
+    beta: {beta}
+    seed: {seed}
+    *************************************
+    '''
+    print(prompt_str)
+
+    with open(config_yaml, 'w') as file:
+        yaml.dump(cfg, file, default_flow_style=False)
 
     wandb.init(config=cfg, **cfg["wandb"])
-    exp_path = Path(f"exp/{cfg['wandb']['name']}")
+    exp_path = Path(f"exp/{exp_name}")
     if not Path("exp").exists():
         Path("exp").mkdir()
     # if debug is true, enable to overwrite experiment
@@ -122,11 +186,11 @@ def main(args):
     Path(exp_path / "score").mkdir(exist_ok=True)
 
     # save config
-    shutil.copy(args.config, (exp_path / "config.yaml"))
+    shutil.copy(config_yaml, (exp_path / "config.yaml"))
     shutil.copy("src/methods/trainer_MT.py", (exp_path / "trainer.py"))
     shutil.copy("src/methods/train_MT.py", (exp_path / "train.py"))
     shutil.copy("src/dataset.py", (exp_path / "dataset.py"))
-    shutil.copy("src/models/sed_model.py", (exp_path / "Conformer.py"))
+    shutil.copy(f"src/models/{model_type}.py", (exp_path / f"{model_type}.py"))
 
     # get config
     data_root = cfg["data_root"]
@@ -161,8 +225,8 @@ def main(args):
 
     feat_dir = Path(f"{data_root}/features/{feat_root}")
 
-    if Path("stats/stats_Conformer.npz").exists():
-        shutil.copy("stats/stats_Conformer.npz", f"{exp_path}/stats.npz")
+    if Path(f"stats/stats_{model_type}.npz").exists():
+        shutil.copy(f"stats/stats_{model_type}.npz", f"{exp_path}/stats.npz")
 
     # collect dataset stats
     if Path(f"{exp_path}/stats.npz").exists():
@@ -205,8 +269,6 @@ def main(args):
         prob=0.0,
     )
 
-    use_events = cfg["use_events"]
-    use_bg = cfg['use_bg']
     train_sync_dataset = SEDDataset_synth(
         train_sync_df,
         data_dir=(feat_dir / "train/synthetic"),
@@ -245,10 +307,9 @@ def main(args):
         is_valid=True,
     )
 
-    batch_size = cfg["batch_size"]
-    batch_size_sync = cfg["batch_size_sync"]
     if cfg["ngpu"] > 1:
         batch_size *= cfg["ngpu"]
+        batch_size_sync *= cfg["ngpu"]
 
     loader_train_sync = DataLoader(
         train_sync_dataset,
@@ -298,10 +359,18 @@ def main(args):
     # display PYTHONPATH
     logging.info("python path = " + os.environ.get("PYTHONPATH", "(None)"))
 
-    model = SEDModel(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
-                     encoder_kwargs=cfg["model"]["encoder"])
-    ema_model = SEDModel(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
+    model = None
+    ema_model = None
+    if model_type == "Conformer":
+        model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
                          encoder_kwargs=cfg["model"]["encoder"])
+        ema_model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
+                             encoder_kwargs=cfg["model"]["encoder"])
+    elif model_type == "CRNN":
+        model = CRNN(n_class=len(classes), attention=cfg["model"]["attention"], gen_count=cfg["gen_count"],
+                         cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"])
+        ema_model = CRNN(n_class=len(classes), attention=cfg["model"]["attention"], gen_count=cfg["gen_count"],
+                             cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"])
 
     # Show network architecture details
     logging.info(model)
@@ -331,7 +400,7 @@ def main(args):
     scheduler = getattr(torch.optim.lr_scheduler, cfg["scheduler"])(optimizer, **cfg["scheduler_params"])
 
     trainer = MeanTeacherTrainer(
-        model_name=model_name,
+        model_name=exp_name,
         model=model,
         ema_model=ema_model,
         loader_train_sync=loader_train_sync,
@@ -346,6 +415,9 @@ def main(args):
         trainer_options=trainer_options,
         use_events=use_events,
         use_bg=use_bg,
+        use_sigmoid=use_sigmoid,
+        use_mixup=use_mixup,
+        beta=beta,
     )
 
     trainer.run()
