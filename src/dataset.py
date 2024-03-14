@@ -19,8 +19,9 @@ class SEDDataset_synth(Dataset):
         twice_data=False,
         use_events=False,
         classes: list = None,
-        use_bg = False,
+        use_bg=False,
         gen_count=1,
+        use_clean=False,
     ):
         self.df = df
         self.data_dir = data_dir
@@ -32,15 +33,16 @@ class SEDDataset_synth(Dataset):
 
         self.use_events = use_events
         self.use_bg = use_bg
+        self.use_clean = use_clean
         self.gen_count = gen_count
-
+        temp_root, feat_dir = os.path.split(os.path.abspath(os.path.join(self.data_dir, "../..")))
         if use_events or use_bg:
-            temp_root, feat_dir = os.path.split(os.path.abspath(os.path.join(self.data_dir, "../..")))
-
             if use_events:
                 self.event_dir = os.path.join(temp_root+"_raw", feat_dir)
             if use_bg:
                 self.bg_dir = os.path.join(temp_root+"_raw_bg",feat_dir)
+        if use_clean:
+            self.clean_dir = Path(os.path.join(temp_root+"_clean", feat_dir))
 
 
         if type(classes) in [np.ndarray, np.array]:
@@ -57,6 +59,10 @@ class SEDDataset_synth(Dataset):
         data = self._get_sample(data_id)
         label = self._get_label(data_id)  # label - (625, 10)
 
+        if self.use_clean:
+            clean_data = self._get_clean(data_id)
+        else:
+            clean_data = None
         if self.use_bg:
             bg_data = self._get_bg(data_id)
         else:
@@ -73,7 +79,11 @@ class SEDDataset_synth(Dataset):
                 events_data = events_data + bg_data
 
         if self.transforms is not None:
-            data, label = self.transforms((data, label))
+            data, label, clean_data = self.transforms((data, label, clean_data))
+            if clean_data is not None:
+                clean = torch.from_numpy(clean_data).float().unsqueeze(0)
+            else:
+                clean = 0
             if self.use_events:
                 events_data, events_label = self.transforms((events_data, events_label))
                 events_label = events_label[self.ptr // 2:: self.ptr, :]
@@ -85,6 +95,7 @@ class SEDDataset_synth(Dataset):
         # select center frame as a pooled label
         label = label[self.ptr // 2 :: self.ptr, :] # label - (156, 10)
 
+
         # Return twice data with different augmentation if use mean teacher training
         if not self.twice_data:
             if self.use_events:
@@ -92,13 +103,14 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(data).float().unsqueeze(0),
                     torch.from_numpy(label).float(),
                     torch.from_numpy(events_data).float().unsqueeze(0),
-                    torch.from_numpy(events_label).float().unsqueeze(0)
+                    torch.from_numpy(events_label).float().unsqueeze(0),
+                    clean
                 )
             else:
                 return (
                     torch.from_numpy(data).float().unsqueeze(0),
                     torch.from_numpy(label).float(),
-                    data_id,
+                    clean
                 )
         else:
             if self.use_events:
@@ -108,14 +120,15 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(label).float(),
                     torch.from_numpy(events_data[0]).float().unsqueeze(0),
                     torch.from_numpy(events_data[1]).float().unsqueeze(0),
-                    torch.from_numpy(events_label).float()
+                    torch.from_numpy(events_label).float(),
+                    clean
                 )
             else:
                 return (
                     torch.from_numpy(data[0]).float().unsqueeze(0),
                     torch.from_numpy(data[1]).float().unsqueeze(0),
                     torch.from_numpy(label).float(),
-                    data_id,
+                    clean
                 )
 
     def _check_exist(self):
@@ -125,6 +138,10 @@ class SEDDataset_synth(Dataset):
             if not os.path.exists(self.data_dir / f.replace("wav", "npy")):
                 del_ids.append(i)
         self.filenames = np.delete(self.filenames, del_ids)
+
+    def _get_clean(self, filename):
+        clean_data = np.load(self.clean_dir / filename.replace("wav", "npy")).astype(np.float32)
+        return clean_data
 
     def _get_bg(self, filename):
         fileid = filename[:-4]
@@ -239,7 +256,7 @@ class SEDDataset(Dataset):
         data = self._get_sample(data_id)
         label = self._get_label(data_id)
         if self.transforms is not None:
-            data, label = self.transforms((data, label))
+            data, label, _ = self.transforms((data, label))
 
         # label pooling here because data augmentation may handle label (e.g. time shifting)
         # select center frame as a pooled label

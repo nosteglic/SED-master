@@ -6,7 +6,7 @@ import numpy as np
 
 
 class Transform(object):
-    def transform_data(self, data):
+    def transform_data(self, data, clean=None):
         # Mandatory to be defined by subclasses
         raise NotImplementedError("Abstract object")
 
@@ -15,16 +15,20 @@ class Transform(object):
         return label
 
     def _apply_transform(self, sample_no_index):
-        data, label = sample_no_index
+        if len(sample_no_index) == 2:
+            data, label = sample_no_index
+            clean = None
+        else:
+            data, label, clean = sample_no_index
         if type(data) is tuple:  # meaning there is more than one data_input (could be duet, triplet...)
             data = list(data)
             for k in range(len(data)):
-                data[k] = self.transform_data(data[k])
+                data[k], clean = self.transform_data(data[k], clean)
             data = tuple(data)
         else:
-            data = self.transform_data(data)
+            data, clean = self.transform_data(data, clean)
         label = self.transform_label(label)
-        return data, label
+        return data, label, clean
 
     def __call__(self, sample):
         """Apply the transformation
@@ -102,9 +106,11 @@ class Normalize(Transform):
         self.ref_level_db = 20
         self.min_level_db = -80
 
-    def transform_data(self, data):
+    def transform_data(self, data, clean=None):
         if self.mode == "gcmvn":
-            return (data - self.mean) / self.std
+            if clean is not None:
+                clean = (clean - self.mean) / self.std
+            return (data - self.mean) / self.std, clean
         elif self.mode == "cmvn":
             return (data - data.mean(axis=0)) / data.std(axis=0)
         elif self.mode == "cmn":
@@ -116,8 +122,12 @@ class Normalize(Transform):
 
 class DataTwice(Transform):
     def __call__(self, sample):
-        data, label = sample
-        return (data, np.copy(data)), label
+        if len(sample) == 2:
+            data, label = sample
+            clean = None
+        else:
+            data, label, clean = sample
+        return (data, np.copy(data)), label, clean
 
 
 class AugmentGaussianNoise(Transform):
@@ -158,7 +168,7 @@ class AugmentGaussianNoise(Transform):
 
         return features + noise
 
-    def transform_data(self, data):
+    def transform_data(self, data, clean=None):
         """Apply the transformation on data
         Args:
             data: np.array, the data to be modified
@@ -175,18 +185,28 @@ class AugmentGaussianNoise(Transform):
         else:
             raise NotImplementedError("Only (mean, std) or snr can be given")
         # return data, noisy_data
-        return noisy_data
+        return noisy_data, clean
 
 
 class ApplyLog(Transform):
     def __init__(self, zero_db=False):
         self.zero_db = zero_db
+        self.clean_to_db = False
 
-    def transform_data(self, sample):
+    def transform_data(self, sample, clean=None):
+        if clean is not None:
+            if not self.clean_to_db:
+                self.clean_to_db = True
+                if self.zero_db:
+                    clean = librosa.amplitude_to_db(clean, ref=np.max)
+                else:
+                    clean = librosa.amplitude_to_db(clean)
+            else:
+                self.clean_to_db = False
         if self.zero_db:
-            return librosa.amplitude_to_db(sample, ref=np.max)
+            return librosa.amplitude_to_db(sample, ref=np.max), clean
         else:
-            return librosa.amplitude_to_db(sample)
+            return librosa.amplitude_to_db(sample), clean
 
 
 class TimeMask(Transform):
@@ -194,13 +214,13 @@ class TimeMask(Transform):
         self.num_masks = num_masks
         self.mask_param = mask_param
 
-    def transform_data(self, data):
+    def transform_data(self, data, clean=None):
         tau = data.shape[0]
         for i in range(self.num_masks):
             t = int(np.random.uniform(low=0.0, high=self.mask_param))
             t0 = random.randint(0, tau - t)
             data[t0 : t0 + t, :] = 0
-        return data
+        return data, clean
 
 
 class FrequencyMask(Transform):
@@ -208,13 +228,13 @@ class FrequencyMask(Transform):
         self.num_masks = num_masks
         self.mask_param = mask_param
 
-    def transform_data(self, data):
+    def transform_data(self, data, clean=None):
         v = data.shape[1]
         for i in range(self.num_masks):
             f = int(np.random.uniform(low=0.0, high=self.mask_param))
             f0 = random.randint(0, v - f)
             data[:, f0 : f0 + f] = 0
-        return data
+        return data, clean
 
 
 class TimeShift(Transform):
@@ -223,7 +243,7 @@ class TimeShift(Transform):
         self.std = std
 
     def __call__(self, sample):
-        data, label = sample
+        data, label, clean = sample
         shift = int(np.random.normal(self.mean, self.std))
 
         if type(data) is tuple:  # meaning there is more than one data_input (could be duet, triplet...)
@@ -234,10 +254,13 @@ class TimeShift(Transform):
         else:
             data = np.roll(data, shift, axis=0)
 
+        if clean is not None:
+            clean = np.roll(clean, shift, axis=0)
+
         if len(label.shape) == 2:
             label = np.roll(label, shift, axis=0)  # strong label only
 
-        sample = (data, label)
+        sample = (data, label, clean)
         return sample
 
 
@@ -246,10 +269,10 @@ class FrequencyShift(Transform):
         self.mean = mean
         self.std = std
 
-    def transform_data(self, data):
+    def transform_data(self, data, clean=None):
         shift = int(np.random.normal(self.mean, self.std))
         data = np.roll(data, shift, axis=1)
-        return data
+        return data, clean
 
 
 class PadOrTrunc(Transform):
@@ -274,7 +297,7 @@ class PadOrTrunc(Transform):
         else:
             return label
 
-    def transform_data(self, data):
+    def transform_data(self, data, clean=None):
         """Apply the transformation on data
         Args:
             data: np.array, the data to be modified
@@ -283,7 +306,7 @@ class PadOrTrunc(Transform):
             np.array
             The transformed data
         """
-        return pad_trunc_seq(data, self.nb_frames)
+        return pad_trunc_seq(data, self.nb_frames), clean
 
 
 def pad_trunc_seq(x, max_len):

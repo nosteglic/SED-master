@@ -16,6 +16,7 @@ class SEDModel(torch.nn.Module):
         ptr=8,
         pooling="token",
         layer_init="pytorch",
+        use_clean=False,
     ):
         super(SEDModel, self).__init__()
 
@@ -29,6 +30,10 @@ class SEDModel(torch.nn.Module):
 
         self.encoder = ConformerEncoder(self.input_dim, **encoder_kwargs)
 
+        self.use_clean = use_clean
+        if use_clean:
+            self.projection1 = torch.nn.Linear(adim, adim * 4)
+            self.projection2 = torch.nn.Linear(adim * 4, adim * 2)
         self.classifier = torch.nn.Linear(adim, n_class)
 
         if self.pooling == "attention":
@@ -44,6 +49,9 @@ class SEDModel(torch.nn.Module):
     def forward(self, x, events=None, mask=None):
         if events is not None:
             x = torch.cat([x, events], dim=0)
+            use_events = True
+        else:
+            use_events = False
 
         x = self.cnn(x) # x - (32, 64, --, 1)
         bs, chan, frames, freq = x.size()
@@ -63,6 +71,15 @@ class SEDModel(torch.nn.Module):
 
         x, _ = self.encoder(x, mask)
 
+        if self.use_clean:
+            if use_events:
+                x_origin = x[:events.shape[0], :, :]
+            else:
+                x_origin = x
+            x_origin = self.projection1(x_origin)
+            x_origin = self.projection2(x_origin)
+
+
         if self.pooling == "attention":
             strong = self.classifier(x)
             sof = self.dense(x)  # [bs, frames, nclass]
@@ -79,13 +96,14 @@ class SEDModel(torch.nn.Module):
             strong = self.classifier(x)
             weak = self.autopool(strong)
 
-        if events is not None:
-            return {
-                "strong": strong,
-                "weak": weak,
-                "events": x[events.shape[0]:, 1:, :],
-            }
-        return {"strong": strong, "weak": weak}
+        results = {}
+        results["strong"] = strong
+        results["weak"] = weak
+        if use_events:
+            results["events"] = x[events.shape[0]:, 1:, :]
+        if self.use_clean:
+            results["x"] = x_origin
+        return results
 
     def reset_parameters(self, initialization: str = "pytorch"):
         if initialization.lower() == "pytorch":

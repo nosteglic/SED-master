@@ -31,7 +31,30 @@ from models.Conformer import SEDModel as Conformer
 from models.CRNN import SEDModel as CRNN
 from trainer_MT import MeanTeacherTrainer, MeanTeacherTrainerOptions
 from transforms import ApplyLog, Compose, get_transforms
+from sklearn.cluster import MiniBatchKMeans
+import joblib
 
+def get_km(datasest):
+    kmeans = MiniBatchKMeans(
+        n_clusters=50,
+        init='k-means++',
+        batch_size=1000,
+        verbose=1,
+        compute_labels=False,
+        max_iter=300,
+        max_no_improvement=300,
+        n_init=10,
+        reassignment_ratio=0.0,
+    )
+    print("----------get kmeans---------------")
+    dataloader = DataLoader(datasest, batch_size=1)
+    x_clean = []
+    for x in tqdm(dataloader):
+        x_clean.append(x[-1].cpu().numpy())
+    x_clean = np.squeeze(np.concatenate(x_clean, axis=-1))
+
+    kmeans.fit(x_clean)
+    joblib.dump(kmeans, "/data2/syx/kmeans300.pkl")
 
 def collect_stats(datasets, save_path):
     """Compute dataset statistics
@@ -82,11 +105,12 @@ def parse_args(args):
     parser.add_argument("--model_type", type=str, default="test")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--batch_size_sync", type=int, default=32)
-    parser.add_argument("--use_events", type=int, default=1)
+    parser.add_argument("--use_events", type=int, default=0)
     parser.add_argument("--use_bg", type=int, default=0)
     parser.add_argument("--use_sigmoid", type=int, default=0)
-    parser.add_argument("--use_mixup", type=int, default=1)
+    parser.add_argument("--use_mixup", type=int, default=0)
     parser.add_argument("--beta", type=float, default=-1)
+    parser.add_argument("--use_clean", type=int, default=1)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--debugmode", type=int, default=1)
     parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
@@ -123,6 +147,7 @@ def main(args):
     use_bg = convert_int_to_bool(args.use_bg)
     use_sigmoid = convert_int_to_bool(args.use_sigmoid)
     use_mixup = convert_int_to_bool(args.use_mixup)
+    use_clean = convert_int_to_bool(args.use_clean)
     beta = args.beta
     seed = args.seed
     debugmode = convert_int_to_bool(args.debugmode)
@@ -145,6 +170,8 @@ def main(args):
             exp_name += f"-beta{str(beta)}"
         else:
             beta = None
+    if use_clean:
+        exp_name += "-clean"
     exp_name += f"-seed{str(seed)}"
 
     cfg['batch_size'] = batch_size
@@ -153,6 +180,7 @@ def main(args):
     cfg['use_bg'] = use_bg
     cfg['use_sigmoid'] = use_sigmoid
     cfg['use_mixup'] = use_mixup
+    cfg['use_clean'] = use_clean
     cfg['beta'] = beta
     cfg['seed'] = seed
     cfg["wandb"]["name"] = exp_name
@@ -164,6 +192,7 @@ def main(args):
     model_type: {model_type}
     batch_size: {batch_size}
     batch_size_sync: {batch_size_sync}
+    use_clean? {use_clean}
     use_events? {use_events}
     use_bg? {use_bg}
     use_sigmoid? {use_sigmoid}
@@ -249,7 +278,7 @@ def main(args):
             "encode_function": encode_function,
             "transforms": Compose([ApplyLog()]),
         }
-        train_sync_dataset = SEDDataset_synth(train_sync_df, data_dir=(feat_dir / "train/synthetic"), use_events = False, **kwargs_dataset)
+        train_sync_dataset = SEDDataset_synth(train_sync_df, data_dir=(feat_dir / "train/synthetic"), **kwargs_dataset)
         train_weak_dataset = SEDDataset(train_weak_df, data_dir=(feat_dir / "train/weak"), **kwargs_dataset)
         train_unlabel_dataset = SEDDataset(train_unlabel_df, data_dir=(feat_dir / "train/unlabel_in_domain"), **kwargs_dataset)
 
@@ -257,7 +286,7 @@ def main(args):
             [train_sync_dataset, train_weak_dataset, train_unlabel_dataset],
             f"{exp_path}/stats.npz",
         )
-        shutil.copy(f"{exp_path}/stats.npz", "stats/stats_Conformer.npz")
+        shutil.copy(f"{exp_path}/stats.npz", f"stats/stats_{model_type}.npz")
 
     norm_dict_params = {
         "mean": stats["mean"],
@@ -287,10 +316,14 @@ def main(args):
         pooling_time_ratio=cfg["pooling_time_ratio"],
         transforms=train_transforms,
         twice_data=True,
-        use_events = use_events,
-        use_bg = use_bg,
-        classes = classes,
+        use_events=use_events,
+        use_bg=use_bg,
+        use_clean=use_clean,
+        classes=classes,
     )
+
+    if use_clean:
+        get_km(train_sync_dataset)
     train_weak_dataset = SEDDataset(
         train_weak_df,
         data_dir=(feat_dir / "train/weak"),
@@ -374,12 +407,12 @@ def main(args):
     ema_model = None
     if model_type == "Conformer" or model_type == "test":
         model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
-                         encoder_kwargs=cfg["model"]["encoder"])
+                         encoder_kwargs=cfg["model"]["encoder"], use_clean=use_clean)
         ema_model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
                              encoder_kwargs=cfg["model"]["encoder"])
     elif model_type == "CRNN":
         model = CRNN(n_class=len(classes), attention=cfg["model"]["attention"], gen_count=cfg["gen_count"],
-                         cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"])
+                         cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"], use_clean=use_clean)
         ema_model = CRNN(n_class=len(classes), attention=cfg["model"]["attention"], gen_count=cfg["gen_count"],
                              cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"])
 
@@ -428,6 +461,7 @@ def main(args):
         use_bg=use_bg,
         use_sigmoid=use_sigmoid,
         use_mixup=use_mixup,
+        use_clean=use_clean,
         beta=beta,
     )
 

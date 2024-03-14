@@ -8,6 +8,7 @@ import random
 import shutil
 from pathlib import Path
 from typing import Optional
+from sklearn.cluster import KMeans
 
 import numpy as np
 import pandas as pd
@@ -106,12 +107,16 @@ class MeanTeacherTrainer(object):
         use_bg = False,
         use_sigmoid=True,
         use_mixup=False,
+        use_clean=False,
         beta=None,
     ):
         self.use_events = use_events
         self.use_bg = use_bg
         self.use_sigmoid = use_sigmoid
         self.use_mixup = use_mixup
+        self.use_clean = use_clean
+        if use_clean:
+            kmeans = KMeans(50)
         self.beta = beta
         self.model_name = model_name
         self.model = model.cuda() if torch.cuda.is_available() else model
@@ -201,7 +206,7 @@ class MeanTeacherTrainer(object):
             # ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
             ema_param.data.mul_(alpha).add_(param.data, alpha=(1 - alpha))
 
-    def mixup(self, data, data_ema, target, alpha=0.2):
+    def mixup(self, data, data_ema, target, clean=None, alpha=0.2):
         """Mixup data augmentation
         https://arxiv.org/abs/1710.09412
         Apply the same parameter for data and data_ema since to obtain the same target
@@ -214,11 +219,16 @@ class MeanTeacherTrainer(object):
 
         perm = torch.randperm(batch_size)
 
+        if clean is not None and clean.shape != 1:
+            mixed_clean = c * clean + (1 - c) * clean[perm, :]
+        else:
+            mixed_clean = None
+
         mixed_data = c * data + (1 - c) * data[perm, :]
         mixed_data_ema = c * data_ema + (1 - c) * data_ema[perm, :]
         mixed_target = c * target + (1 - c) * target[perm, :]
 
-        return mixed_data, mixed_data_ema, mixed_target
+        return mixed_data, mixed_data_ema, mixed_target, mixed_clean
 
     def train_one_step(self) -> None:
         """ One iteration of a Mean Teacher model """
@@ -230,34 +240,35 @@ class MeanTeacherTrainer(object):
         load data
         '''
         if self.use_events:
-            sample_sync, sample_sync_ema, target_sync, sample_event, sample_event_ema, target_event = next(self.train_iter_sync)
+            sample_sync, sample_sync_ema, target_sync, sample_event, sample_event_ema, target_event, sample_clean = next(self.train_iter_sync)
         else:
-            sample_sync, sample_sync_ema, target_sync, ids_sync = next(self.train_iter_sync)
+            sample_sync, sample_sync_ema, target_sync, sample_clean = next(self.train_iter_sync)
             sample_event = None
             sample_event_ema = None
             target_event = None
-            len_event = None
         # sample_sync - (12, 1, 625, 128)
         # sample_sync_ema - (12, 1, 625, 128)
         # target_sync - (12, 156, 10)
+        if sample_clean is not None and sample_clean.shape == 0:
+            sample_clean = None
 
         sample_real_weak, sample_real_weak_ema, target_real_weak, ids_real_weak = next(self.train_iter_real_weak)
         sample_real_unlabel, sample_real_unlabel_ema, target_real_unlabel, ids_real_unlabel = next(self.train_iter_real_unlabel)
 
         if self.options.use_mixup and 0.5 > random.random():
-            sample_sync, sample_sync_ema, target_sync = self.mixup(
-                sample_sync, sample_sync_ema, target_sync
+            sample_sync, sample_sync_ema, target_sync, sample_clean = self.mixup(
+                sample_sync, sample_sync_ema, target_sync, sample_clean
             )
 
             if self.use_events and self.use_mixup:
-                sample_event, sample_event_ema, target_event = self.mixup(
+                sample_event, sample_event_ema, target_event, _ = self.mixup(
                     sample_event, sample_event_ema, target_event
                 )
 
-            sample_real_weak, sample_real_weak_ema, target_real_weak = self.mixup(
+            sample_real_weak, sample_real_weak_ema, target_real_weak, _ = self.mixup(
                 sample_real_weak, sample_real_weak_ema, target_real_weak
             )
-            sample_real_unlabel, sample_real_unlabel_ema, target_real_unlabel = self.mixup(
+            sample_real_unlabel, sample_real_unlabel_ema, target_real_unlabel, _ = self.mixup(
                 sample_real_unlabel, sample_real_unlabel_ema, target_real_unlabel
             )
 
@@ -265,6 +276,8 @@ class MeanTeacherTrainer(object):
             sample_sync.to(self.device),
             sample_sync_ema.to(self.device),
         )
+
+
 
         target_sync = target_sync.to(self.device)
         target_real_weak = target_real_weak.max(dim=1)[0].to(self.device)
@@ -338,7 +351,7 @@ class MeanTeacherTrainer(object):
         self.losses_cls_weak.update(loss_cls_weak.item())
         self.losses_con_strong.update(loss_con_strong.item())
         self.losses_con_weak.update(loss_con_weak.item())
-        if self.use_events and loss_event!=0:
+        if self.use_events and loss_event != 0:
             self.losses_event.update(loss_event.item())
 
         if self.forward_count % self.options.log_interval == 0:
