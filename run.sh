@@ -2,19 +2,19 @@
 
 export WANDB_API_KEY='6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
 export WANDB_MODE='offline'
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 stage=2
 stop_stage=2
-
+use_nohup=1
 debugmode=1
 model_type=Conformer # CRNN/Conformer
 batch_size=32
 batch_size_sync=32
 use_events=1
 use_bg=0
-use_sigmoid=0
-use_mixup=0
+use_sigmoid=1
+use_mixup=1
 beta=-1
 seed=7
 
@@ -35,12 +35,13 @@ if [ $use_events -eq 1 ]; then
   else
     exp_name="$exp_name-nomixup"
   fi
-  if [ $beta -ne -1 ]; then
+  if [ $beta != "-1" ]; then
     exp_name="$exp_name-beta$beta"
   fi
+
 fi
 exp_name="$exp_name-seed$seed"
-#exp_name="CRNN-b24-07"
+#exp_name="Conformer-b32-sync32-concat-nosigmoid-mixup-beta-1.0-seed7"
 
 on_test=1
 revalid=1
@@ -48,10 +49,10 @@ test_mode=score # loss/score/psds
 
 fun_confirm_cfg(){
   # 获取用户输入
-    read -p "Please confirm your exp config again: [Y/N]" userInput
+    read -p "$1" userInput
     # 判断用户输入
-    if [ -n "$userInput" ] && [ "$userInput" != "Y" ] && [ "$userInput" != "Yes" ] && [ "$userInput" != "y" ] && [ "$userInput" != "Yes" ]; then
-        echo "$1"
+    if [ "$userInput" != "Y" ] && [ "$userInput" != "Yes" ] && [ "$userInput" != "y" ] && [ "$userInput" != "Yes" ]; then
+        echo "$2"
         exit 1  # 终止程序运行
     fi
 }
@@ -64,7 +65,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     echo "------------------------------------------------------------------"
   }
   func_stage1_prompt
-  fun_confirm_cfg "Canceling..."
+  fun_confirm_cfg "Please confirm your exp config again: [Y/N]" "Canceling..."
   python local/feature_extraction.py --config config/dcase_21_MT_$model_type.yaml
   # 检查退出状态
   if [ $? -eq 0 ]; then
@@ -77,6 +78,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
   func_stage2_prompt(){
     echo "--------------Stage 2: Training model--------------"
     echo "config currently used: config/dcase_21_MT_$model_type.yaml"
+    echo "nohup? $use_nohup"
     echo "exp name: $exp_name"
     echo "model_type: $model_type"
     echo "batch_size: $batch_size"
@@ -90,19 +92,33 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     echo "---------------------------------------------------"
   }
   func_stage2_prompt
-  fun_confirm_cfg "Canceling..."
-  nohup python -u src/methods/train_MT.py \
-  --model_type $model_type \
-  --batch_size $batch_size \
-  --batch_size_sync $batch_size_sync \
-  --use_events $use_events \
-  --use_bg $use_bg \
-  --use_sigmoid $use_sigmoid \
-  --use_mixup $use_mixup \
-  --beta $beta \
-  --seed $seed \
-  --debugmode $debugmode \
-  > logs/$exp_name.log 2>&1 &
+  fun_confirm_cfg "Please confirm your exp config again: [Y/N]" "Canceling..."
+  if [ $use_nohup -eq 1 ]; then
+    nohup python -u src/methods/train_MT.py \
+    --model_type $model_type \
+    --batch_size $batch_size \
+    --batch_size_sync $batch_size_sync \
+    --use_events $use_events \
+    --use_bg $use_bg \
+    --use_sigmoid $use_sigmoid \
+    --use_mixup $use_mixup \
+    --beta $beta \
+    --seed $seed \
+    --debugmode $debugmode \
+    > logs/$exp_name.log 2>&1 &
+  else
+    python -u src/methods/train_MT.py \
+    --model_type $model_type \
+    --batch_size $batch_size \
+    --batch_size_sync $batch_size_sync \
+    --use_events $use_events \
+    --use_bg $use_bg \
+    --use_sigmoid $use_sigmoid \
+    --use_mixup $use_mixup \
+    --beta $beta \
+    --seed $seed \
+    --debugmode $debugmode
+  fi
   pid=$!
   echo "GPU ID: $CUDA_VISIBLE_DEVICES"
   echo "wandb mode: $WANDB_MODE"
@@ -121,7 +137,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   }
   func_stage3_py() {
     func_stage3_prompt
-    fun_confirm_cfg "Canceling..."
+    fun_confirm_cfg "Please confirm your exp config again: [Y/N]" "Canceling..."
     python -u src/methods/test_MT.py  \
     --exp_name $exp_name \
     --on_test $on_test \
@@ -131,11 +147,14 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     if [ $? -eq 0 ]; then
         func_stage3_prompt
         echo "Done"
+        echo "------------------------------------------------------------"
+    else
+      revalid=0
     fi
   }
   func_stage3_py
   if [ $revalid -eq 1 ]; then
-    fun_confirm_cfg "Only revalid..."
+    fun_confirm_cfg "Continue to test? [Y/N]" "Only revalid..."
     revalid=0
     func_stage3_py
   fi
