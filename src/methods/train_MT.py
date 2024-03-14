@@ -5,14 +5,9 @@
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
 import argparse
-import ast
 import logging
 import math
 import os
-
-# os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
-# os.environ["WANDB_MODE"] = 'offline'
-# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -84,14 +79,14 @@ def seed_everything(seed):
 
 def parse_args(args):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_type", type=str, default="CRNN")
-    parser.add_argument("--batch_size", type=int, default=12)
-    parser.add_argument("--batch_size_sync", type=int, default=12)
+    parser.add_argument("--model_type", type=str, default="test")
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size_sync", type=int, default=32)
     parser.add_argument("--use_events", type=int, default=1)
     parser.add_argument("--use_bg", type=int, default=0)
-    parser.add_argument("--use_sigmoid", type=int)
-    parser.add_argument("--use_mixup", type=int, default=0)
-    parser.add_argument("--beta", type=float)
+    parser.add_argument("--use_sigmoid", type=int, default=0)
+    parser.add_argument("--use_mixup", type=int, default=1)
+    parser.add_argument("--beta", type=float, default=-1)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--debugmode", type=int, default=1)
     parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
@@ -109,6 +104,11 @@ def convert_int_to_bool(x):
 def main(args):
     args = parse_args(args)
     model_type = args.model_type
+
+    if model_type == "test":
+        os.environ["WANDB_API_KEY"] = '6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
+        os.environ["WANDB_MODE"] = 'offline'
+        os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 
     config_yaml = f"config/dcase21_MT_{args.model_type}.yaml"
@@ -128,6 +128,25 @@ def main(args):
     debugmode = convert_int_to_bool(args.debugmode)
     seed_everything(seed)
 
+    exp_name = f"{model_type}-b{str(batch_size)}-sync{str(batch_size_sync)}"
+    if use_events:
+        exp_name += "-concat"
+        if use_bg:
+            exp_name += "-bg"
+        if use_sigmoid:
+            exp_name += "-sigmoid"
+        elif not use_sigmoid:
+            exp_name += "-nosigmoid"
+        if use_mixup:
+            exp_name += "-mixup"
+        elif not use_mixup:
+            exp_name += "-nomixup"
+        if beta != -1.0:
+            exp_name += f"-beta{str(beta)}"
+        else:
+            beta = None
+    exp_name += f"-seed{str(seed)}"
+
     cfg['batch_size'] = batch_size
     cfg['batch_size_sync'] = batch_size_sync
     cfg['use_events'] = use_events
@@ -136,24 +155,6 @@ def main(args):
     cfg['use_mixup'] = use_mixup
     cfg['beta'] = beta
     cfg['seed'] = seed
-
-    exp_name = f"{model_type}-b{str(batch_size)}-sync{str(batch_size_sync)}"
-    if use_events:
-        exp_name += "-concat"
-        if use_bg:
-            exp_name += "-bg"
-        if use_sigmoid:
-            exp_name += "-sigmoid"
-        else:
-            exp_name += "-nosigmoid"
-        if use_mixup:
-            exp_name += "-mixup"
-        else:
-            exp_name += "-nomixup"
-        if beta is not None or beta != "":
-            exp_name += f"-beta{str(beta)}"
-    exp_name += f"-seed{str(seed)}"
-
     cfg["wandb"]["name"] = exp_name
     cfg["wandb"]["id"] = exp_name
 
@@ -199,7 +200,8 @@ def main(args):
     shutil.copy("src/methods/trainer_MT.py", (exp_path / "trainer.py"))
     shutil.copy("src/methods/train_MT.py", (exp_path / "train.py"))
     shutil.copy("src/dataset.py", (exp_path / "dataset.py"))
-    shutil.copy(f"src/models/{model_type}.py", (exp_path / f"{model_type}.py"))
+    if model_type != "test":
+        shutil.copy(f"src/models/{model_type}.py", (exp_path / f"{model_type}.py"))
 
     # get config
     data_root = cfg["data_root"]
@@ -370,7 +372,7 @@ def main(args):
 
     model = None
     ema_model = None
-    if model_type == "Conformer":
+    if model_type == "Conformer" or model_type == "test":
         model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
                          encoder_kwargs=cfg["model"]["encoder"])
         ema_model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],

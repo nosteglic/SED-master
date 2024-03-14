@@ -1,6 +1,7 @@
 import argparse
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 import librosa
@@ -30,7 +31,6 @@ def feature_extraction(cfg, src, dest):
 
     y_duration = librosa.get_duration(filename=src)
     _, filename = os.path.split(src)
-
 
     return {"filename": filename, "duration": y_duration}
 
@@ -92,6 +92,20 @@ def resample_wav_raw(cfg, need_resample_wav, wav_root, wav_dir, nj=1):
     else:
         logging.info(f"{wav_dir} is already exists, resampling is skipped.")
 
+def resample_wav_clean(cfg, need_resample_wav, wav_root, wav_dir, nj=1):
+    if need_resample_wav:
+        wav_dir.mkdir(parents=True, exist_ok=True)
+        src_dir = Path(wav_root)
+        dest_dir = wav_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        Parallel(n_jobs=nj)(
+            delayed(resample_wav)(cfg, filename, (dest_dir / filename.name))
+            for filename in
+            tqdm(src_dir.glob("*.wav"), ncols=100, desc="clean" + " of wavs extract", total=len(os.listdir(src_dir)))
+        )
+    else:
+        logging.info(f"{wav_dir} is already exists, resampling is skipped.")
+
 
 def recompute_feature_synth(cfg, need_recompute_feature, wav_dir, feat_dir, nj=1):
     if need_recompute_feature:
@@ -108,6 +122,7 @@ def recompute_feature_synth(cfg, need_recompute_feature, wav_dir, feat_dir, nj=1
             )
     else:
         logging.info(f"{feat_dir} is already exists, feature extraction is skipped.")
+
 
 def recompute_feature_raw(cfg, need_recompute_feature, wav_dir, feat_dir, nj=1):
     if need_recompute_feature:
@@ -129,6 +144,24 @@ def recompute_feature_raw(cfg, need_recompute_feature, wav_dir, feat_dir, nj=1):
     else:
         logging.info(f"{feat_dir} is already exists, feature extraction is skipped.")
 
+def recompute_feature_clean(cfg, need_recompute_feature, wav_dir, feat_dir, nj=1):
+    if need_recompute_feature:
+        feat_dir.mkdir(parents=True, exist_ok=True)
+        src_dir = wav_dir
+        dest_dir = feat_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        dict_duration = Parallel(n_jobs=nj)(
+            delayed(feature_extraction)(cfg, filename, (dest_dir / filename.stem))
+            for filename in
+            tqdm(src_dir.glob("*.wav"), ncols=100, desc="clean" + " of feats extract", total=len(os.listdir(src_dir)))
+        )
+
+        df_duration = pd.DataFrame(dict_duration)
+        df_duration.to_csv(dest_dir / "duration.tsv", index=False, sep="\t")
+    else:
+        logging.info(f"{feat_dir} is already exists, feature extraction is skipped.")
+
 def ext_synth(cfg, nj, nee_resample_wav, need_recompute_feature):
     wav_root = f"{cfg['data_root']}/audio"
     feat_root = f"{cfg['data_root']}/features"
@@ -141,19 +174,23 @@ def ext_synth(cfg, nj, nee_resample_wav, need_recompute_feature):
         f"{feat_root}/sr{cfg['sample_rate']}"
         + f"_n_mels{cfg['mel_spec']['n_mels']}_n_fft{cfg['mel_spec']['n_fft']}_hop_size{cfg['mel_spec']['hop_size']}"
     )
-    recompute_feature_synth(cfg=cfg, need_recompute_feature=need_recompute_feature, wav_dir=wav_dir, feat_dir=feat_dir, nj=nj)
+    recompute_feature_synth(cfg=cfg, need_recompute_feature=need_recompute_feature, wav_dir=wav_dir, feat_dir=feat_dir,
+                            nj=nj)
 
 
 def ext_raw(cfg, nj, nee_resample_wav, need_recompute_feature):
     super_root = os.path.split(cfg['data_root'])[0]
     # wav_root = f"{super_root}/sources_raw_targets"
     # feat_root = f"{cfg['data_root']}/feature_raw"
+
     wav_root = f"{super_root}/sources_raw_backgrounds"
     feat_root = f"{cfg['data_root']}/feature_raw_bg"
 
     cfg = cfg["feature"]
     # wav_dir = Path(f"{super_root}/wav_raw/sr{cfg['sample_rate']}")
-    wav_dir = Path(f"{super_root}/wav_raw_bg/sr{cfg['sample_rate']}")
+    # wav_dir = Path(f"{super_root}/wav_raw_bg/sr{cfg['sample_rate']}")
+    wav_dir = Path(f"{super_root}/wav_clean/sr{cfg['sample_rate']}")
+
 
     resample_wav_raw(cfg=cfg, need_resample_wav=nee_resample_wav, wav_root=wav_root, wav_dir=wav_dir, nj=nj)
 
@@ -161,7 +198,23 @@ def ext_raw(cfg, nj, nee_resample_wav, need_recompute_feature):
         f"{feat_root}/sr{cfg['sample_rate']}"
         + f"_n_mels{cfg['mel_spec']['n_mels']}_n_fft{cfg['mel_spec']['n_fft']}_hop_size{cfg['mel_spec']['hop_size']}"
     )
-    recompute_feature_raw(cfg=cfg, need_recompute_feature=need_recompute_feature, wav_dir=wav_dir, feat_dir=feat_dir, nj=nj)
+    recompute_feature_raw(cfg=cfg, need_recompute_feature=need_recompute_feature, wav_dir=wav_dir, feat_dir=feat_dir,
+                          nj=nj)
+
+def ext_clean(cfg, nj, nee_resample_wav, need_recompute_feature):
+    super_root = os.path.split(cfg['data_root'])[0]
+    wav_root = f"{super_root}/clean"
+    feat_root = f"{cfg['data_root']}/feature_clean"
+    cfg = cfg["feature"]
+    wav_dir = Path(f"{super_root}/wav_clean/sr{cfg['sample_rate']}")
+    resample_wav_clean(cfg=cfg, need_resample_wav=nee_resample_wav, wav_root=wav_root, wav_dir=wav_dir, nj=nj)
+
+    feat_dir = Path(
+        f"{feat_root}/sr{cfg['sample_rate']}"
+        + f"_n_mels{cfg['mel_spec']['n_mels']}_n_fft{cfg['mel_spec']['n_fft']}_hop_size{cfg['mel_spec']['hop_size']}"
+    )
+    recompute_feature_clean(cfg=cfg, need_recompute_feature=need_recompute_feature, wav_dir=wav_dir, feat_dir=feat_dir,
+                          nj=nj)
 
 def parse_args(args):
     parser = argparse.ArgumentParser()
@@ -171,6 +224,7 @@ def parse_args(args):
     parser.add_argument("--need_recompute_feature", type=bool, default=True)
     parser.add_argument("--extract_type", default="raw")
     return parser.parse_args(args)
+
 
 def main(args):
     args = parse_args(args)
@@ -182,8 +236,11 @@ def main(args):
     nee_resample_wav = args.nee_resample_wav
     need_recompute_feature = args.need_recompute_feature
     # ext_synth(cfg=cfg, nj=nj)
-    ext_raw(
+    ext_clean(
         cfg=cfg,
         nj=nj,
         nee_resample_wav=nee_resample_wav,
         need_recompute_feature=need_recompute_feature)
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

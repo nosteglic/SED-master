@@ -8,7 +8,6 @@ import os
 import math
 import random
 
-
 class SEDDataset_synth(Dataset):
     def __init__(
         self,
@@ -73,7 +72,6 @@ class SEDDataset_synth(Dataset):
             if bg_data is not None:
                 events_data = events_data + bg_data
 
-
         if self.transforms is not None:
             data, label = self.transforms((data, label))
             if self.use_events:
@@ -94,7 +92,7 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(data).float().unsqueeze(0),
                     torch.from_numpy(label).float(),
                     torch.from_numpy(events_data).float().unsqueeze(0),
-                    torch.from_numpy(events_label).float().unsqueeze(0),
+                    torch.from_numpy(events_label).float().unsqueeze(0)
                 )
             else:
                 return (
@@ -110,7 +108,7 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(label).float(),
                     torch.from_numpy(events_data[0]).float().unsqueeze(0),
                     torch.from_numpy(events_data[1]).float().unsqueeze(0),
-                    torch.from_numpy(events_label).float(),
+                    torch.from_numpy(events_label).float()
                 )
             else:
                 return (
@@ -165,53 +163,21 @@ class SEDDataset_synth(Dataset):
     def concat_data(self, events_dict, n_class, T=625, F=128):
         events_label = np.zeros((T, n_class))
         events_data = np.zeros((T, F))
-        events_len = [0] * self.gen_count
-        choice_data = None
+
         for count in range(self.gen_count):
-            random.shuffle(events_dict)
             onset = 0
-            offset = 0
-            mini_data = []
-            mini_len = T * 1.5 / 10
-            for i, data in enumerate(events_dict):
-                split_len = T - offset - 1
-                if split_len < T * 1.5 / 10:
-                    # max: 80.81
-                    # min: 0.05
-                    break
+            split_len = T
+            while split_len > 0:
+                data = random.choice(events_dict)
                 if type(data['data']) in [np.ndarray, np.array]:
                     choice_data = data['data'][:split_len, :]
                 elif type(data['data']) is list:
-                    if i == len(events_dict) - 1:
-                        split_onset = random.choice(np.arange(split_len))
-                        choice_data = np.concatenate(data['data'], axis=0)[split_onset:split_onset+split_len, :]
-                    else:
-                        choice_data = random.choice(data['data'])[:split_len, :]
-                if choice_data.shape[0] < mini_len:
-                    mini_len = choice_data.shape[0]
-                    mini_data.append(
-                        {
-                            "id": data['id'],
-                            'data': choice_data
-                        }
-                    )
+                    choice_data = random.choice(data['data'])[:split_len, :]
                 offset = choice_data.shape[0] + onset - 1
-                events_label[onset:offset+1,data['id']] = 1
-                events_data[onset:offset+1, :] = choice_data
-                onset = offset + 1
-                if onset >= T:
-                    break
-            split_len = T - onset
-            while split_len > 0 and len(mini_data) != 0:
-                choice_dict = random.choice(mini_data)
-                choice_data = choice_dict['data'][: split_len,:]
-                offset = choice_data.shape[0]+onset-1
-                events_label[onset:offset + 1, choice_dict['id']] = 1
+                events_label[onset:offset + 1, data['id']] = 1
                 events_data[onset:offset + 1, :] = choice_data
                 onset = offset + 1
                 split_len = T - onset
-
-
         return events_data, events_label
 
     def _get_sample(self, filename):
