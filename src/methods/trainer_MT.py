@@ -108,6 +108,7 @@ class MeanTeacherTrainer(object):
         use_sigmoid=True,
         use_mixup=False,
         use_clean=False,
+        km=None,
         beta=None,
     ):
         self.use_events = use_events
@@ -115,8 +116,7 @@ class MeanTeacherTrainer(object):
         self.use_sigmoid = use_sigmoid
         self.use_mixup = use_mixup
         self.use_clean = use_clean
-        if use_clean:
-            kmeans = KMeans(50)
+        self.km = km
         self.beta = beta
         self.model_name = model_name
         self.model = model.cuda() if torch.cuda.is_available() else model
@@ -219,7 +219,7 @@ class MeanTeacherTrainer(object):
 
         perm = torch.randperm(batch_size)
 
-        if clean is not None and clean.shape != 1:
+        if clean is not None and len(clean.shape) != 1:
             mixed_clean = c * clean + (1 - c) * clean[perm, :]
         else:
             mixed_clean = None
@@ -249,7 +249,7 @@ class MeanTeacherTrainer(object):
         # sample_sync - (12, 1, 625, 128)
         # sample_sync_ema - (12, 1, 625, 128)
         # target_sync - (12, 156, 10)
-        if sample_clean is not None and sample_clean.shape == 0:
+        if sample_clean is not None and len(sample_clean.shape) == 1:
             sample_clean = None
 
         sample_real_weak, sample_real_weak_ema, target_real_weak, ids_real_weak = next(self.train_iter_real_weak)
@@ -276,8 +276,6 @@ class MeanTeacherTrainer(object):
             sample_sync.to(self.device),
             sample_sync_ema.to(self.device),
         )
-
-
 
         target_sync = target_sync.to(self.device)
         target_real_weak = target_real_weak.max(dim=1)[0].to(self.device)
@@ -310,6 +308,12 @@ class MeanTeacherTrainer(object):
         output_weak = self.model(sample_real_weak)
         output_unlabel = self.model(sample_real_unlabel)
 
+        if self.use_clean:
+            bs, T, F = sample_clean.shape
+            km_labels = self.km.predict(
+                sample_clean.reshape(-1, F)
+            ).reshape(bs, T, F)
+
         # compute classification loss
         loss_cls_strong = self.loss_cls(output_sync["strong"], target_sync)
         loss_cls_weak = (
@@ -329,7 +333,7 @@ class MeanTeacherTrainer(object):
             self.loss_con(output_unlabel["weak"], output_ema_unlabel["weak"])
         ) / 3
 
-        if self.use_events:
+        if self.use_events and self.use_sigmoid is not None:
             mat_label = torch.bmm(target_event, target_event.permute(0, 2, 1))
             mat_feat = calculate_similarity(output_sync['events'], use_sigmoid=self.use_sigmoid)
             # mat_feat = calculate_similarity_ema(output_sync['events'], output_ema_sync['events'])
@@ -343,6 +347,7 @@ class MeanTeacherTrainer(object):
             else:
                 loss_total = (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong + loss_event) / self.accum_grad
         else:
+            loss_event = 0
             loss_total = (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong) / self.accum_grad
         loss_total.backward()  # Backprop
         loss_total.detach()  # Truncate the graph
@@ -355,7 +360,7 @@ class MeanTeacherTrainer(object):
             self.losses_event.update(loss_event.item())
 
         if self.forward_count % self.options.log_interval == 0:
-            if self.use_events:
+            if self.use_events and self.use_sigmoid is not None:
                 if not os.path.exists(f"figs/{self.model_name}"):
                     os.makedirs(f"figs/{self.model_name}", exist_ok=True)
                 plt.matshow(mat_feat[0].detach().cpu().numpy())

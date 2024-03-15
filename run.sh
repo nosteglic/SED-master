@@ -2,24 +2,27 @@
 
 export WANDB_API_KEY='6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
 export WANDB_MODE='offline'
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=3
 
 stage=2
-stop_stage=2
 use_nohup=1
 debugmode=1
 model_type=Conformer # CRNN/Conformer
 batch_size=32
 batch_size_sync=32
+use_clean=0
 use_events=1
-use_bg=0
-use_sigmoid=1
 use_mixup=1
+use_bg=0
+use_sigmoid=-1
 beta=-1
 seed=7
 
 exp_name="$model_type-b$batch_size-sync$batch_size_sync"
 
+if [ $use_clean -eq 1 ]; then
+  exp_name="$exp-clean"
+fi
 if [ $use_events -eq 1 ]; then
   exp_name="$exp_name-concat"
   if [ $use_bg -eq 1 ]; then
@@ -58,7 +61,7 @@ fun_confirm_cfg(){
 }
 
 # stage还没有施工好
-if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
+if [ ${stage} -eq 1 ]; then
   func_stage1_prompt(){
     echo "--------------Stage 1: Extracting feature extraction--------------"
     echo "config currently used: config/dcase_21_MT_$model_type.yaml"
@@ -74,7 +77,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
   fi
 fi
 
-if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
+if [ ${stage} -eq 2 ]; then
   func_stage2_prompt(){
     echo "--------------Stage 2: Training model--------------"
     echo "config currently used: config/dcase_21_MT_$model_type.yaml"
@@ -83,18 +86,22 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     echo "model_type: $model_type"
     echo "batch_size: $batch_size"
     echo "batch_size_sync: $batch_size_sync"
+    echo "use_clean? $use_clean"
     echo "use_events? $use_events"
     echo "use_bg? $use_bg"
     echo "use_sigmoid? $use_sigmoid"
     echo "use_mixup? $use_mixup"
     echo "beta: $beta"
     echo "seed: $seed"
+    echo "GPU ID: $CUDA_VISIBLE_DEVICES"
+    echo "wandb mode: $WANDB_MODE"
     echo "---------------------------------------------------"
   }
   func_stage2_prompt
   fun_confirm_cfg "Please confirm your exp config again: [Y/N]" "Canceling..."
   if [ $use_nohup -eq 1 ]; then
     nohup python -u src/methods/train_MT.py \
+    --exp_name $exp_name \
     --model_type $model_type \
     --batch_size $batch_size \
     --batch_size_sync $batch_size_sync \
@@ -103,6 +110,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     --use_sigmoid $use_sigmoid \
     --use_mixup $use_mixup \
     --beta $beta \
+    --use_clean $use_clean \
     --seed $seed \
     --debugmode $debugmode \
     > logs/$exp_name.log 2>&1 &
@@ -120,13 +128,11 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     --debugmode $debugmode
   fi
   pid=$!
-  echo "GPU ID: $CUDA_VISIBLE_DEVICES"
-  echo "wandb mode: $WANDB_MODE"
   echo "PID: $pid"
   echo "---------------------------------------------------"
 fi
 
-if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
+if [ ${stage} -eq 3 ]; then
   func_stage3_prompt(){
     echo "--------------Stage 3: Validing/Testing model--------------"
     echo "model currently used: $exp_name"
@@ -149,6 +155,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         echo "Done"
         echo "------------------------------------------------------------"
     else
+      echo "model currently used: $exp_name is cancelled"
       revalid=0
     fi
   }

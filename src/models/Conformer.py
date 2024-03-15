@@ -4,6 +4,7 @@ import torch
 
 from models.baseline_model import CNN
 from models.conformer.conformer_encoder import ConformerEncoder
+from models.conformer.conformer_decoder import CNNUpsampler
 
 class SEDModel(torch.nn.Module):
     def __init__(
@@ -44,6 +45,7 @@ class SEDModel(torch.nn.Module):
         elif self.pooling == "token":
             self.linear_emb = torch.nn.Linear(1, self.input_dim)
 
+        self.unsampler = CNNUpsampler(n_in_channel=144)
         self.reset_parameters(layer_init)
 
     def forward(self, x, events=None, mask=None):
@@ -71,6 +73,7 @@ class SEDModel(torch.nn.Module):
 
         x, _ = self.encoder(x, mask)
 
+        # x_test = x.unsqueeze(1)
         if self.use_clean:
             if use_events:
                 x_origin = x[:events.shape[0], :, :]
@@ -78,7 +81,6 @@ class SEDModel(torch.nn.Module):
                 x_origin = x
             x_origin = self.projection1(x_origin)
             x_origin = self.projection2(x_origin)
-
 
         if self.pooling == "attention":
             strong = self.classifier(x)

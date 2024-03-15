@@ -10,6 +10,9 @@ import math
 import os
 
 import sys
+
+import librosa
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import random
@@ -31,30 +34,47 @@ from models.Conformer import SEDModel as Conformer
 from models.CRNN import SEDModel as CRNN
 from trainer_MT import MeanTeacherTrainer, MeanTeacherTrainerOptions
 from transforms import ApplyLog, Compose, get_transforms
-from sklearn.cluster import MiniBatchKMeans
+from sklearn.cluster import MiniBatchKMeans, KMeans
 import joblib
 
-def get_km(datasest):
-    kmeans = MiniBatchKMeans(
-        n_clusters=50,
+def get_km(datasest, km_path=None):
+    if os.path.exists(km_path):
+        return joblib.load(km_path)
+    kmeans = KMeans(
+        n_clusters=100,
         init='k-means++',
-        batch_size=1000,
-        verbose=1,
-        compute_labels=False,
-        max_iter=300,
-        max_no_improvement=300,
-        n_init=10,
-        reassignment_ratio=0.0,
+        n_init=20,
+        max_iter=100,
+        tol=0.0
     )
+    # kmeans = MiniBatchKMeans(
+    #     n_clusters=100,
+    #     init='k-means++',
+    #     batch_size=10000,
+    #     verbose=1,
+    #     compute_labels=False,
+    #     max_iter=100,
+    #     max_no_improvement=100,
+    #     init_size=None,
+    #     tol=0.0,
+    #     n_init=20,
+    #     reassignment_ratio=0.0,
+    # )
     print("----------get kmeans---------------")
     dataloader = DataLoader(datasest, batch_size=1)
     x_clean = []
     for x in tqdm(dataloader):
-        x_clean.append(x[-1].cpu().numpy())
-    x_clean = np.squeeze(np.concatenate(x_clean, axis=-1))
+        mfcc = librosa.feature.mfcc(
+            S=x[-1].cpu().numpy().squeeze().T,
+            n_mfcc=13)
+        delta1 = librosa.feature.delta(mfcc, order=1)
+        delta2 = librosa.feature.delta(mfcc, order=2)
+        x_clean.append(np.concatenate([mfcc, delta1, delta2], axis=0).transpose(1, 0))
+        # x_clean.append(x[-1].cpu().numpy().squeeze())
+    x_clean = np.squeeze(np.concatenate(x_clean, axis=-2))
 
     kmeans.fit(x_clean)
-    joblib.dump(kmeans, "/data2/syx/kmeans300.pkl")
+    joblib.dump(kmeans, km_path)
 
 def collect_stats(datasets, save_path):
     """Compute dataset statistics
@@ -111,6 +131,8 @@ def parse_args(args):
     parser.add_argument("--use_mixup", type=int, default=0)
     parser.add_argument("--beta", type=float, default=-1)
     parser.add_argument("--use_clean", type=int, default=1)
+    parser.add_argument("--exp_name", type=str)
+    parser.add_argument("--kmeans", type=str, default="kmeans_mfcc_100_ptr")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--debugmode", type=int, default=1)
     parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
@@ -148,31 +170,38 @@ def main(args):
     use_sigmoid = convert_int_to_bool(args.use_sigmoid)
     use_mixup = convert_int_to_bool(args.use_mixup)
     use_clean = convert_int_to_bool(args.use_clean)
+    km_name = args.kmeans
     beta = args.beta
     seed = args.seed
     debugmode = convert_int_to_bool(args.debugmode)
     seed_everything(seed)
 
     exp_name = f"{model_type}-b{str(batch_size)}-sync{str(batch_size_sync)}"
+
+    if use_clean:
+        exp_name += "-clean"
     if use_events:
         exp_name += "-concat"
         if use_bg:
             exp_name += "-bg"
-        if use_sigmoid:
-            exp_name += "-sigmoid"
-        elif not use_sigmoid:
-            exp_name += "-nosigmoid"
-        if use_mixup:
-            exp_name += "-mixup"
-        elif not use_mixup:
-            exp_name += "-nomixup"
+        if use_sigmoid is not None:
+            if use_sigmoid:
+                exp_name += "-sigmoid"
+            elif not use_sigmoid:
+                exp_name += "-nosigmoid"
+        if use_mixup is not None:
+            if use_mixup:
+                exp_name += "-mixup"
+            elif not use_mixup:
+                exp_name += "-nomixup"
         if beta != -1.0:
             exp_name += f"-beta{str(beta)}"
         else:
             beta = None
-    if use_clean:
-        exp_name += "-clean"
     exp_name += f"-seed{str(seed)}"
+    if model_type != "test" and exp_name != args.exp_name:
+        print("exp_name is not the same!")
+        sys.exit()
 
     cfg['batch_size'] = batch_size
     cfg['batch_size_sync'] = batch_size_sync
@@ -181,6 +210,7 @@ def main(args):
     cfg['use_sigmoid'] = use_sigmoid
     cfg['use_mixup'] = use_mixup
     cfg['use_clean'] = use_clean
+    cfg['kmeans'] = km_name
     cfg['beta'] = beta
     cfg['seed'] = seed
     cfg["wandb"]["name"] = exp_name
@@ -193,6 +223,7 @@ def main(args):
     batch_size: {batch_size}
     batch_size_sync: {batch_size_sync}
     use_clean? {use_clean}
+    kmeans: {km_name}
     use_events? {use_events}
     use_bg? {use_bg}
     use_sigmoid? {use_sigmoid}
@@ -323,7 +354,11 @@ def main(args):
     )
 
     if use_clean:
-        get_km(train_sync_dataset)
+        if not os.path.exists(f"{data_root}/kmeans/{model_type}"):
+            os.mkdir(f"{data_root}/kmeans/{model_type}")
+        km_path = f"{data_root}/kmeans/{model_type}/{km_name}.pkl"
+        get_km(train_sync_dataset, km_path)
+
     train_weak_dataset = SEDDataset(
         train_weak_df,
         data_dir=(feat_dir / "train/weak"),
@@ -462,6 +497,7 @@ def main(args):
         use_sigmoid=use_sigmoid,
         use_mixup=use_mixup,
         use_clean=use_clean,
+        km=km_name,
         beta=beta,
     )
 

@@ -379,3 +379,8 @@ def get_transforms(cfg, nb_frames, need_pad=True, norm_dict_params=None, trainin
         transf.append(PadOrTrunc(nb_frames=nb_frames, apply_to_label=True))
 
     return Compose(transf)
+
+def event_transforms():
+    transf = []
+    transf.append(ApplyLog())
+    return Compose(transf)

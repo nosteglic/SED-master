@@ -38,6 +38,7 @@ def feature_extraction(cfg, src, dest):
 def calculate_mel_spec(x, fs, n_mels, n_fft, hop_size, fmin=None, fmax=None):
     fmin = 0 if fmin is None else fmin
     fmax = fs / 2 if fmax is None else fmax
+
     # Compute spectrogram
     ham_win = np.hamming(n_fft)
 
@@ -204,8 +205,10 @@ def ext_raw(cfg, nj, nee_resample_wav, need_recompute_feature):
 def ext_clean(cfg, nj, nee_resample_wav, need_recompute_feature):
     super_root = os.path.split(cfg['data_root'])[0]
     wav_root = f"{super_root}/clean"
-    feat_root = f"{cfg['data_root']}/feature_clean"
+    feat_root = f"{cfg['data_root']}/features_clean"
     cfg = cfg["feature"]
+    cfg['mel_spec']['n_fft'] *= 4
+    cfg['mel_spec']['hop_size'] *= 4
     wav_dir = Path(f"{super_root}/wav_clean/sr{cfg['sample_rate']}")
     resample_wav_clean(cfg=cfg, need_resample_wav=nee_resample_wav, wav_root=wav_root, wav_dir=wav_dir, nj=nj)
 
@@ -218,7 +221,7 @@ def ext_clean(cfg, nj, nee_resample_wav, need_recompute_feature):
 
 def parse_args(args):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default='config/dcase21_MT_Conformer.yaml')
+    parser.add_argument("--config", default='config/dcase21_MT_CRNN.yaml')
     parser.add_argument("--nj", type=int, default=1)
     parser.add_argument("--nee_resample_wav", type=bool, default=False)
     parser.add_argument("--need_recompute_feature", type=bool, default=True)

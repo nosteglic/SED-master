@@ -7,6 +7,7 @@ from torch.utils.data import Dataset
 import os
 import math
 import random
+from src.transforms import event_transforms
 
 class SEDDataset_synth(Dataset):
     def __init__(
@@ -40,9 +41,9 @@ class SEDDataset_synth(Dataset):
             if use_events:
                 self.event_dir = os.path.join(temp_root+"_raw", feat_dir)
             if use_bg:
-                self.bg_dir = os.path.join(temp_root+"_raw_bg",feat_dir)
+                self.bg_dir = os.path.join(temp_root+"_raw_bg", feat_dir)
         if use_clean:
-            self.clean_dir = Path(os.path.join(temp_root+"_clean", feat_dir))
+            self.clean_dir = Path(os.path.join(temp_root+"_clean", feat_dir+"_ptr"))
 
 
         if type(classes) in [np.ndarray, np.array]:
@@ -58,7 +59,6 @@ class SEDDataset_synth(Dataset):
         data_id = self.filenames[index]
         data = self._get_sample(data_id)
         label = self._get_label(data_id)  # label - (625, 10)
-
         if self.use_clean:
             clean_data = self._get_clean(data_id)
         else:
@@ -79,13 +79,15 @@ class SEDDataset_synth(Dataset):
                 events_data = events_data + bg_data
 
         if self.transforms is not None:
-            data, label, clean_data = self.transforms((data, label, clean_data))
-            if clean_data is not None:
-                clean = torch.from_numpy(clean_data).float().unsqueeze(0)
-            else:
-                clean = 0
+            # data, label, clean_data = self.transforms((data, label, clean_data))
+            data, label, _ = self.transforms((data, label))
+
+            if clean_data is None:
+                clean_data = 0
             if self.use_events:
-                events_data, events_label = self.transforms((events_data, events_label))
+                event_trans = event_transforms
+                events_data, events_label, _ = event_trans((events_data, events_label))
+                events_data, events_label, _ = self.transforms((events_data, events_label))
                 events_label = events_label[self.ptr // 2:: self.ptr, :]
             # data - 0 - (625, 128)
             # data - 1 - (625, 128)
@@ -104,13 +106,13 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(label).float(),
                     torch.from_numpy(events_data).float().unsqueeze(0),
                     torch.from_numpy(events_label).float().unsqueeze(0),
-                    clean
+                    clean_data
                 )
             else:
                 return (
                     torch.from_numpy(data).float().unsqueeze(0),
                     torch.from_numpy(label).float(),
-                    clean
+                    clean_data
                 )
         else:
             if self.use_events:
@@ -121,14 +123,14 @@ class SEDDataset_synth(Dataset):
                     torch.from_numpy(events_data[0]).float().unsqueeze(0),
                     torch.from_numpy(events_data[1]).float().unsqueeze(0),
                     torch.from_numpy(events_label).float(),
-                    clean
+                    clean_data
                 )
             else:
                 return (
                     torch.from_numpy(data[0]).float().unsqueeze(0),
                     torch.from_numpy(data[1]).float().unsqueeze(0),
                     torch.from_numpy(label).float(),
-                    clean
+                    clean_data
                 )
 
     def _check_exist(self):
