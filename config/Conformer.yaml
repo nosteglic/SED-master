@@ -1,0 +1,46 @@
+feature:
+  sample_rate: 16000
+  gain: -3
+  highpass: 10
+  mel_spec:
+    n_mels: 64
+    n_fft: 1024
+    hop_size: 323
+
+pooling_time_ratio: 8
+
+batch_size: 32
+
+model:
+  cnn:
+    activation: "Relu"
+    conv_dropout: 0.1
+    kernel_size: [3, 3, 3, 3, 3, 3, 3]
+    padding: [1, 1, 1, 1, 1, 1, 1]
+    stride: [1, 1, 1, 1, 1, 1, 1]
+    nb_filters: [16, 32, 64, 128, 128, 128, 128]
+    pooling: [[2, 2], [2, 2], [2, 2], [1, 2], [1, 2], [1, 2], [1, 1]]
+
+  encoder_type: Conformer
+
+  encoder:
+    adim: 144
+    aheads: 4
+    dropout_rate: 0.1
+    elayers: 3
+    eunits: 576
+    kernel_size: 7
+
+  pooling: token
+
+trainer_options:
+  accum_grad: 1
+  grad_clip: 5.0
+  log_interval: 250
+  train_steps: 30000
+  rampup_length: 6000
+  consistency_cost: 2.0
+  binarization_type: "global_threshold"
+  threshold: 0.5
+  early_stopping: False
+  patience: 20

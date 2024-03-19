@@ -1,0 +1,12 @@
+use_clean: False
+alpha:
+
+use_concat: False
+use_mixup: False
+use_bg: False
+use_contrast: False
+beta:
+
+other:
+
+exp_root: /data2/syx/results/exp

@@ -6,13 +6,13 @@ import numpy as np
 
 
 class Transform(object):
-    def transform_data(self, data, clean=None):
+    def transform_data(self, data):
         # Mandatory to be defined by subclasses
         raise NotImplementedError("Abstract object")
 
-    def transform_label(self, label):
+    def transform_label(self, label, clean=None):
         # Do nothing, to be changed in subclasses if needed
-        return label
+        return label, clean
 
     def _apply_transform(self, sample_no_index):
         if len(sample_no_index) == 2:
@@ -23,11 +23,11 @@ class Transform(object):
         if type(data) is tuple:  # meaning there is more than one data_input (could be duet, triplet...)
             data = list(data)
             for k in range(len(data)):
-                data[k], clean = self.transform_data(data[k], clean)
+                data[k] = self.transform_data(data[k])
             data = tuple(data)
         else:
-            data, clean = self.transform_data(data, clean)
-        label = self.transform_label(label)
+            data = self.transform_data(data)
+        label, clean = self.transform_label(label, clean=clean)
         return data, label, clean
 
     def __call__(self, sample):
@@ -106,11 +106,9 @@ class Normalize(Transform):
         self.ref_level_db = 20
         self.min_level_db = -80
 
-    def transform_data(self, data, clean=None):
+    def transform_data(self, data):
         if self.mode == "gcmvn":
-            if clean is not None:
-                clean = (clean - self.mean) / self.std
-            return (data - self.mean) / self.std, clean
+            return (data - self.mean) / self.std
         elif self.mode == "cmvn":
             return (data - data.mean(axis=0)) / data.std(axis=0)
         elif self.mode == "cmn":
@@ -168,7 +166,7 @@ class AugmentGaussianNoise(Transform):
 
         return features + noise
 
-    def transform_data(self, data, clean=None):
+    def transform_data(self, data):
         """Apply the transformation on data
         Args:
             data: np.array, the data to be modified
@@ -185,28 +183,18 @@ class AugmentGaussianNoise(Transform):
         else:
             raise NotImplementedError("Only (mean, std) or snr can be given")
         # return data, noisy_data
-        return noisy_data, clean
+        return noisy_data
 
 
 class ApplyLog(Transform):
     def __init__(self, zero_db=False):
         self.zero_db = zero_db
-        self.clean_to_db = False
 
-    def transform_data(self, sample, clean=None):
-        if clean is not None:
-            if not self.clean_to_db:
-                self.clean_to_db = True
-                if self.zero_db:
-                    clean = librosa.amplitude_to_db(clean, ref=np.max)
-                else:
-                    clean = librosa.amplitude_to_db(clean)
-            else:
-                self.clean_to_db = False
+    def transform_data(self, sample):
         if self.zero_db:
-            return librosa.amplitude_to_db(sample, ref=np.max), clean
+            return librosa.amplitude_to_db(sample, ref=np.max)
         else:
-            return librosa.amplitude_to_db(sample), clean
+            return librosa.amplitude_to_db(sample)
 
 
 class TimeMask(Transform):
@@ -214,13 +202,13 @@ class TimeMask(Transform):
         self.num_masks = num_masks
         self.mask_param = mask_param
 
-    def transform_data(self, data, clean=None):
+    def transform_data(self, data):
         tau = data.shape[0]
         for i in range(self.num_masks):
             t = int(np.random.uniform(low=0.0, high=self.mask_param))
             t0 = random.randint(0, tau - t)
             data[t0 : t0 + t, :] = 0
-        return data, clean
+        return data
 
 
 class FrequencyMask(Transform):
@@ -228,13 +216,13 @@ class FrequencyMask(Transform):
         self.num_masks = num_masks
         self.mask_param = mask_param
 
-    def transform_data(self, data, clean=None):
+    def transform_data(self, data):
         v = data.shape[1]
         for i in range(self.num_masks):
             f = int(np.random.uniform(low=0.0, high=self.mask_param))
             f0 = random.randint(0, v - f)
             data[:, f0 : f0 + f] = 0
-        return data, clean
+        return data
 
 
 class TimeShift(Transform):
@@ -254,11 +242,11 @@ class TimeShift(Transform):
         else:
             data = np.roll(data, shift, axis=0)
 
-        if clean is not None:
-            clean = np.roll(clean, shift, axis=0)
-
         if len(label.shape) == 2:
             label = np.roll(label, shift, axis=0)  # strong label only
+
+        if clean is not None:
+            clean = np.roll(clean, shift, axis=0)
 
         sample = (data, label, clean)
         return sample
@@ -269,10 +257,10 @@ class FrequencyShift(Transform):
         self.mean = mean
         self.std = std
 
-    def transform_data(self, data, clean=None):
+    def transform_data(self, data):
         shift = int(np.random.normal(self.mean, self.std))
         data = np.roll(data, shift, axis=1)
-        return data, clean
+        return data
 
 
 class PadOrTrunc(Transform):
@@ -287,17 +275,17 @@ class PadOrTrunc(Transform):
         self.nb_frames = nb_frames
         self.apply_to_label = apply_to_label
 
-    def transform_label(self, label):
+    def transform_label(self, label, clean=None):
         if self.apply_to_label:
             if label is not None:
                 if label.shape == 2:
-                    return pad_trunc_seq(label, self.nb_frames)  # strong label
+                    return pad_trunc_seq(label, self.nb_frames), clean  # strong label
                 else:
-                    return label  # weak label
+                    return label, clean  # weak label
         else:
-            return label
+            return label, clean
 
-    def transform_data(self, data, clean=None):
+    def transform_data(self, data):
         """Apply the transformation on data
         Args:
             data: np.array, the data to be modified
@@ -306,7 +294,7 @@ class PadOrTrunc(Transform):
             np.array
             The transformed data
         """
-        return pad_trunc_seq(data, self.nb_frames), clean
+        return pad_trunc_seq(data, self.nb_frames)
 
 
 def pad_trunc_seq(x, max_len):

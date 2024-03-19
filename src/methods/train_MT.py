@@ -5,13 +5,13 @@
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
 import argparse
+import datetime
 import logging
 import math
 import os
 
 import sys
-
-import librosa
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,57 +34,9 @@ from models.Conformer import SEDModel as Conformer
 from models.CRNN import SEDModel as CRNN
 from trainer_MT import MeanTeacherTrainer, MeanTeacherTrainerOptions
 from transforms import ApplyLog, Compose, get_transforms
-from sklearn.cluster import MiniBatchKMeans, KMeans
-import joblib
 
-def get_km(datasest, km_path=None):
-    if os.path.exists(km_path):
-        return joblib.load(km_path)
-    kmeans = KMeans(
-        n_clusters=100,
-        init='k-means++',
-        n_init=20,
-        max_iter=100,
-        tol=0.0
-    )
-    # kmeans = MiniBatchKMeans(
-    #     n_clusters=100,
-    #     init='k-means++',
-    #     batch_size=10000,
-    #     verbose=1,
-    #     compute_labels=False,
-    #     max_iter=100,
-    #     max_no_improvement=100,
-    #     init_size=None,
-    #     tol=0.0,
-    #     n_init=20,
-    #     reassignment_ratio=0.0,
-    # )
-    print("----------get kmeans---------------")
-    dataloader = DataLoader(datasest, batch_size=1)
-    x_clean = []
-    for x in tqdm(dataloader):
-        mfcc = librosa.feature.mfcc(
-            S=x[-1].cpu().numpy().squeeze().T,
-            n_mfcc=13)
-        delta1 = librosa.feature.delta(mfcc, order=1)
-        delta2 = librosa.feature.delta(mfcc, order=2)
-        x_clean.append(np.concatenate([mfcc, delta1, delta2], axis=0).transpose(1, 0))
-        # x_clean.append(x[-1].cpu().numpy().squeeze())
-    x_clean = np.squeeze(np.concatenate(x_clean, axis=-2))
-
-    kmeans.fit(x_clean)
-    joblib.dump(kmeans, km_path)
 
 def collect_stats(datasets, save_path):
-    """Compute dataset statistics
-    Args:
-        datasets:
-        save_path:
-    Return:
-        mean: (np.ndarray)
-        std: (np.ndarray)
-    """
     logging.info("compute dataset statistics")
     stats = {}
     for dataset in datasets:
@@ -123,29 +75,61 @@ def seed_everything(seed):
 def parse_args(args):
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_type", type=str, default="test")
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--batch_size_sync", type=int, default=32)
-    parser.add_argument("--use_events", type=int, default=0)
-    parser.add_argument("--use_bg", type=int, default=0)
-    parser.add_argument("--use_sigmoid", type=int, default=0)
-    parser.add_argument("--use_mixup", type=int, default=0)
-    parser.add_argument("--beta", type=float, default=-1)
-    parser.add_argument("--use_clean", type=int, default=1)
-    parser.add_argument("--exp_name", type=str)
-    parser.add_argument("--kmeans", type=str, default="kmeans_mfcc_100_ptr")
-    parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--debugmode", type=int, default=1)
-    parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
 
     return parser.parse_args(args)
 
-def convert_int_to_bool(x):
-    if x == 1:
-        return True
-    elif x == 0:
-        return False
-    else:
-        return None
+def get_cfg(model_type):
+    cfg_list = [
+        "aug.yaml",
+        "meta.yaml",
+        f"{model_type}.yaml",
+        "idea.yaml",
+    ]
+
+    cfg = {}
+    for cfg_file in cfg_list:
+        with open(os.path.join("config", cfg_file), "r") as f:
+            cfg.update(yaml.safe_load(f))
+    cfg['model_type'] = model_type
+    cfg['exp_name'] = model_type
+    if cfg['data_aug']['time_shift']['apply']:
+        cfg['exp_name'] += "_timeshift"
+    if cfg['mixup']:
+        cfg['exp_name'] += '_mixup'
+    if cfg['use_clean']:
+        cfg['exp_name'] += "-clean"
+        if cfg['alpha'] is not None:
+            cfg['exp_name'] += f"-alpha{float(cfg['alpha'])}"
+    if cfg['use_concat']:
+        cfg['exp_name'] += "-concat"
+        if cfg['use_mixup']:
+            cfg['exp_name'] += "_mixup"
+        if cfg['use_bg']:
+            cfg['exp_name'] += "_bg"
+        if cfg["use_contrast"]:
+            cfg['exp_name'] += "-contrast"
+            if cfg['beta'] is not None:
+                cfg['exp_name'] += f"_beta{float(cfg['beta'])}"
+    if cfg['other']:
+        cfg['exp_name'] += cfg['other']
+    cfg['exp_name'] += f"-seed{cfg['seed']}"
+
+    if model_type != "test":
+        print("*******Confirm your exp_name*******")
+        print(cfg['exp_name'])
+        print("***********************************")
+        time.sleep(5)
+
+    exp_path = Path(os.path.join(cfg["exp_root"], cfg["exp_name"]))
+    if not Path(cfg["exp_root"]).exists():
+        Path(cfg["exp_root"]).mkdir()
+    exp_path.mkdir(exist_ok=True)
+    Path(exp_path / "model").mkdir(exist_ok=True)
+    Path(exp_path / "predictions").mkdir(exist_ok=True)
+
+    with open(exp_path / "config.yaml", 'w') as file:
+        yaml.dump(cfg, file, default_flow_style=False)
+    return cfg, exp_path
 
 def main(args):
     args = parse_args(args)
@@ -156,122 +140,24 @@ def main(args):
         os.environ["WANDB_MODE"] = 'offline'
         os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
+    cfg, exp_path = get_cfg(model_type=model_type)
 
-    config_yaml = f"config/dcase21_MT_{args.model_type}.yaml"
+    seed_everything(int(cfg['seed']))
 
-    # load config
-    with open(config_yaml) as f:
-        cfg = yaml.safe_load(f)
-
-    batch_size = args.batch_size
-    batch_size_sync = args.batch_size_sync
-    use_events = convert_int_to_bool(args.use_events)
-    use_bg = convert_int_to_bool(args.use_bg)
-    use_sigmoid = convert_int_to_bool(args.use_sigmoid)
-    use_mixup = convert_int_to_bool(args.use_mixup)
-    use_clean = convert_int_to_bool(args.use_clean)
-    km_name = args.kmeans
-    beta = args.beta
-    seed = args.seed
-    debugmode = convert_int_to_bool(args.debugmode)
-    seed_everything(seed)
-
-    exp_name = f"{model_type}-b{str(batch_size)}-sync{str(batch_size_sync)}"
-
-    if use_clean:
-        exp_name += "-clean"
-    if use_events:
-        exp_name += "-concat"
-        if use_bg:
-            exp_name += "-bg"
-        if use_sigmoid is not None:
-            if use_sigmoid:
-                exp_name += "-sigmoid"
-            elif not use_sigmoid:
-                exp_name += "-nosigmoid"
-        if use_mixup is not None:
-            if use_mixup:
-                exp_name += "-mixup"
-            elif not use_mixup:
-                exp_name += "-nomixup"
-        if beta != -1.0:
-            exp_name += f"-beta{str(beta)}"
-        else:
-            beta = None
-    exp_name += f"-seed{str(seed)}"
-    if model_type != "test" and exp_name != args.exp_name:
-        print("exp_name is not the same!")
-        sys.exit()
-
-    cfg['batch_size'] = batch_size
-    cfg['batch_size_sync'] = batch_size_sync
-    cfg['use_events'] = use_events
-    cfg['use_bg'] = use_bg
-    cfg['use_sigmoid'] = use_sigmoid
-    cfg['use_mixup'] = use_mixup
-    cfg['use_clean'] = use_clean
-    cfg['kmeans'] = km_name
-    cfg['beta'] = beta
-    cfg['seed'] = seed
-    cfg["wandb"]["name"] = exp_name
-    cfg["wandb"]["id"] = exp_name
-
-    prompt_str = f'''
-    *******Confirm your exp config*******
-    exp_name: {exp_name}
-    model_type: {model_type}
-    batch_size: {batch_size}
-    batch_size_sync: {batch_size_sync}
-    use_clean? {use_clean}
-    kmeans: {km_name}
-    use_events? {use_events}
-    use_bg? {use_bg}
-    use_sigmoid? {use_sigmoid}
-    use_mixup? {use_mixup}
-    beta: {beta}
-    seed: {seed}
-    *************************************
-    '''
-    print(prompt_str)
-
-    with open(config_yaml, 'w') as file:
-        yaml.dump(cfg, file, default_flow_style=False)
-
+    current_datetime = datetime.datetime.now()
+    formatted_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")
+    cfg['wandb']['name'] = f"{model_type}-{formatted_datetime}"
+    cfg['wandb']['id'] = f"{model_type}-{formatted_datetime}"
     wandb.init(config=cfg, **cfg["wandb"])
-    exp_path = Path(f"exp/{exp_name}")
-    if not Path("exp").exists():
-        Path("exp").mkdir()
-    # if debug is true, enable to overwrite experiment
-    if exp_path.exists():
-        logging.warning(f"{exp_path} is already exist.")
-        if debugmode:
-            logging.warning("Note that experiment will be overwrite.")
-        else:
-            logging.info("Experiment is interrupted. Make sure exp_path will be unique.")
-            sys.exit(0)
-    exp_path.mkdir(exist_ok=True)
-    Path(exp_path / "model").mkdir(exist_ok=True)
-    Path(exp_path / "predictions").mkdir(exist_ok=True)
-    Path(exp_path / "log").mkdir(exist_ok=True)
-    Path(exp_path / "score").mkdir(exist_ok=True)
 
-    # save config
-    shutil.copy(config_yaml, (exp_path / "config.yaml"))
-    shutil.copy("src/methods/trainer_MT.py", (exp_path / "trainer.py"))
-    shutil.copy("src/methods/train_MT.py", (exp_path / "train.py"))
-    shutil.copy("src/dataset.py", (exp_path / "dataset.py"))
-    if model_type != "test":
-        shutil.copy(f"src/models/{model_type}.py", (exp_path / f"{model_type}.py"))
-
-    # get config
     data_root = cfg["data_root"]
     feat_cfg = cfg["feature"]
 
-    # get df from meta
     sync_meta = f"{data_root}/{cfg['sync_meta']}"
     weak_meta = f"{data_root}/{cfg['weak_meta']}"
     unlabel_meta = f"{data_root}/{cfg['unlabel_meta']}"
     valid_meta = f"{data_root}/{cfg['valid_meta']}"
+
     train_sync_df = pd.read_csv(sync_meta, header=0, sep="\t")
     train_weak_df = pd.read_csv(weak_meta, header=0, sep="\t")
     train_unlabel_df = pd.read_csv(unlabel_meta, header=0, sep="\t")
@@ -299,7 +185,6 @@ def main(args):
     if Path(f"stats/stats_{model_type}.npz").exists():
         shutil.copy(f"stats/stats_{model_type}.npz", f"{exp_path}/stats.npz")
 
-    # collect dataset stats
     if Path(f"{exp_path}/stats.npz").exists():
         stats = np.load(
             f"{exp_path}/stats.npz",
@@ -317,7 +202,7 @@ def main(args):
             [train_sync_dataset, train_weak_dataset, train_unlabel_dataset],
             f"{exp_path}/stats.npz",
         )
-        shutil.copy(f"{exp_path}/stats.npz", f"stats/stats_{model_type}.npz")
+        shutil.copy(f"{exp_path}/stats.npz", f"stats/stats_{cfg['model_type']}.npz")
 
     norm_dict_params = {
         "mean": stats["mean"],
@@ -347,17 +232,11 @@ def main(args):
         pooling_time_ratio=cfg["pooling_time_ratio"],
         transforms=train_transforms,
         twice_data=True,
-        use_events=use_events,
-        use_bg=use_bg,
-        use_clean=use_clean,
         classes=classes,
+        use_clean=cfg['use_clean'],
+        use_concat=cfg['use_concat'],
+        use_bg=cfg['use_bg'],
     )
-
-    if use_clean:
-        if not os.path.exists(f"{data_root}/kmeans/{model_type}"):
-            os.mkdir(f"{data_root}/kmeans/{model_type}")
-        km_path = f"{data_root}/kmeans/{model_type}/{km_name}.pkl"
-        get_km(train_sync_dataset, km_path)
 
     train_weak_dataset = SEDDataset(
         train_weak_df,
@@ -387,12 +266,11 @@ def main(args):
     )
 
     if cfg["ngpu"] > 1:
-        batch_size *= cfg["ngpu"]
-        batch_size_sync *= cfg["ngpu"]
+        cfg['batch_size'] *= cfg["ngpu"]
 
     loader_train_sync = DataLoader(
         train_sync_dataset,
-        batch_size=batch_size_sync,
+        batch_size=cfg['batch_size'],
         shuffle=True,
         num_workers=cfg["num_workers"],
         drop_last=True,
@@ -400,7 +278,7 @@ def main(args):
     )
     loader_train_real_weak = DataLoader(
         train_weak_dataset,
-        batch_size=batch_size,
+        batch_size=cfg['batch_size'],
         shuffle=True,
         num_workers=cfg["num_workers"],
         drop_last=True,
@@ -408,7 +286,7 @@ def main(args):
     )
     loader_train_real_unlabel = DataLoader(
         train_unlabel_dataset,
-        batch_size=batch_size * 2,
+        batch_size=cfg['batch_size'] * 2,
         shuffle=True,
         num_workers=cfg["num_workers"],
         drop_last=True,
@@ -416,48 +294,46 @@ def main(args):
     )
     loader_valid = DataLoader(
         valid_dataset,
-        batch_size=batch_size,
+        batch_size=cfg['batch_size'],
         shuffle=False,
         num_workers=cfg["num_workers"],
         pin_memory=True,
     )
 
-    # logging info
-    if args.verbose > 0:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s (%(module)s:%(lineno)d) %(levelname)s: %(message)s",
-        )
-    else:
-        logging.basicConfig(
-            level=logging.WARN,
-            format="%(asctime)s (%(module)s:%(lineno)d) %(levelname)s: %(message)s",
-        )
-        logging.warning("Skip DEBUG/INFO messages")
+    logging.basicConfig(
+        level=logging.WARN,
+        format="%(asctime)s (%(module)s:%(lineno)d) %(levelname)s: %(message)s",
+    )
 
-    # display PYTHONPATH
     logging.info("python path = " + os.environ.get("PYTHONPATH", "(None)"))
 
     model = None
     ema_model = None
     if model_type == "Conformer" or model_type == "test":
-        model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
-                         encoder_kwargs=cfg["model"]["encoder"], use_clean=use_clean)
-        ema_model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
-                             encoder_kwargs=cfg["model"]["encoder"])
-    elif model_type == "CRNN":
-        model = CRNN(n_class=len(classes), attention=cfg["model"]["attention"], gen_count=cfg["gen_count"],
-                         cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"], use_clean=use_clean)
-        ema_model = CRNN(n_class=len(classes), attention=cfg["model"]["attention"], gen_count=cfg["gen_count"],
-                             cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"])
+        model = Conformer(
+            n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], encoder_kwargs=cfg["model"]["encoder"],
+            use_clean=cfg['use_clean']
+        )
+        ema_model = Conformer(
+            n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], encoder_kwargs=cfg["model"]["encoder"],
+            use_clean=cfg['use_clean']
+        )
+    elif cfg['model_type'] == "CRNN":
+        model = CRNN(
+            n_class=len(classes), attention=cfg["model"]["attention"],
+            cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"]
+        )
+        ema_model = CRNN(
+            n_class=len(classes), attention=cfg["model"]["attention"],
+            cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"]
+        )
 
-    # Show network architecture details
     logging.info(model)
     logging.info(model.parameters())
     logging.info(f"model parameter: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
     wandb.watch(model)
 
-    trainer_options = MeanTeacherTrainerOptions(**cfg["trainer_options"])
+    trainer_options = MeanTeacherTrainerOptions(use_mixup=cfg['mixup'], **cfg["trainer_options"])
     trainer_options._set_validation_options(
         valid_meta=valid_meta,
         valid_audio_dir=cfg["valid_audio_dir"],
@@ -467,7 +343,6 @@ def main(args):
         pooling_time_ratio=cfg["pooling_time_ratio"],
     )
 
-    # set optimizer and lr scheduler
     trainable_params = filter(lambda p: p.requires_grad, model.parameters())
     if cfg["optimizer"] == "Adam":
         optimizer = torch.optim.Adam(trainable_params, **cfg["optimizer_params"])
@@ -478,8 +353,12 @@ def main(args):
 
     scheduler = getattr(torch.optim.lr_scheduler, cfg["scheduler"])(optimizer, **cfg["scheduler_params"])
 
+    alpha, beta = None, None
+    if cfg['alpha'] is not None:
+        beta = float(cfg['alpha'])
+    if cfg['beta'] is not None:
+        beta = float(cfg['beta'])
     trainer = MeanTeacherTrainer(
-        model_name=exp_name,
         model=model,
         ema_model=ema_model,
         loader_train_sync=loader_train_sync,
@@ -492,16 +371,13 @@ def main(args):
         pretrained=cfg["pretrained"],
         resume=cfg["resume"],
         trainer_options=trainer_options,
-        use_events=use_events,
-        use_bg=use_bg,
-        use_sigmoid=use_sigmoid,
-        use_mixup=use_mixup,
-        use_clean=use_clean,
-        km=km_name,
+        alpha=alpha,
         beta=beta,
     )
 
     trainer.run()
+
+    print(f"{cfg['exp_name']} is Done.")
 
 
 if __name__ == "__main__":

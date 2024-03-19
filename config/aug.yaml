@@ -1,0 +1,29 @@
+norm_mode: gcmvn
+
+apply_prob: 0.5
+
+mixup: False
+
+data_aug:
+  semi_supervised_training: True
+  time_shift:
+    apply: False
+    params:
+      mean: 0
+      std: 90
+  frequency_shift:
+    apply: False
+    params:
+      mean: 0
+      std: 3
+  frequency_mask:
+    apply: False
+    params:
+      num_masks: 1
+      mask_param: 100
+  add_noise:
+    apply: False
+    params:
+      mean: 0.0
+      std: 0.01
+      snr: 30

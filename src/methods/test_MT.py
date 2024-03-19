@@ -50,8 +50,6 @@ def convert_int_to_bool(x):
 def parse_args(args):
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp_name", type=str, required=True)
-    parser.add_argument("--debugmode", type=int)
-    parser.add_argument("--verbose", "-V", default=0, type=int, help="Verbose option")
     parser.add_argument("--on_test", type=int, help="Choose validation or eval/public datasets")
     parser.add_argument("--revalid", type=int, help="Revalid parameters")
     parser.add_argument("--mode", type=str, default="score", help="Model uses best score or best loss or best psds")
@@ -76,15 +74,15 @@ def main(args):
     args = parse_args(args)
     args.revalid = convert_int_to_bool(args.revalid)
     args.on_test = convert_int_to_bool(args.on_test)
-    args.debugmode =  convert_int_to_bool(args.debugmode)
 
     if args.revalid:
         args.on_test = False
 
-    exp_path = Path(f"{os.getcwd()}/exp/{args.exp_name}")
+    exp_path = f"/data2/syx/results/exp/{args.exp_name}"
+
+    exp_path = Path(exp_path)
     assert exp_path.exists()
 
-    # load config
     with open(exp_path / "config.yaml") as f:
         cfg = yaml.safe_load(f)
 
@@ -102,7 +100,6 @@ def main(args):
     n_frams_per_sec = feat_cfg["sample_rate"] / feat_cfg["mel_spec"]["hop_size"]
     n_frames = math.ceil(cfg["max_len_seconds"] * n_frams_per_sec)
 
-    # Note: assume that the same class used in the training is included at least once.
     classes = test_df.event_label.dropna().sort_values().unique()
     many_hot_encoder = ManyHotEncoder(labels=classes, n_frames=n_frames)
     encode_function = many_hot_encoder.encode_strong_df
@@ -155,35 +152,29 @@ def main(args):
         pin_memory=True,
     )
 
-    # logging info
-    if args.verbose > 0:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s (%(module)s:%(lineno)d) %(levelname)s: %(message)s",
-        )
-    else:
-        logging.basicConfig(
-            level=logging.WARN,
-            format="%(asctime)s (%(module)s:%(lineno)d) %(levelname)s: %(message)s",
-        )
-        logging.warning("Skip DEBUG/INFO messages")
 
-    # display PYTHONPATH
+    logging.basicConfig(
+        level=logging.WARN,
+        format="%(asctime)s (%(module)s:%(lineno)d) %(levelname)s: %(message)s",
+    )
+    logging.warning("Skip DEBUG/INFO messages")
+
     logging.info("python path = " + os.environ.get("PYTHONPATH", "(None)"))
 
     seed_everything(int(cfg["seed"]))
 
-    if "model_type" in cfg:
-        model_type = cfg["model_type"]
-    else:
-        model_type = cfg["wandb"]["name"].split("-")[0]
+    model_type = cfg["model_type"]
 
+    model = None
     if model_type == "Conformer":
-        model = Conformer(n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], gen_count=cfg["gen_count"],
-                          encoder_kwargs=cfg["model"]["encoder"])
+        model = Conformer(
+            n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], encoder_kwargs=cfg["model"]["encoder"],
+            use_clean=cfg['use_clean']
+        )
     elif model_type == "CRNN":
-        model = CRNN(n_class=len(classes), attention=cfg["model"]["attention"], gen_count=cfg["gen_count"],
-                     cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"])
+        model = CRNN(
+            n_class=len(classes), attention=cfg["model"]["attention"], cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"]
+        )
 
     if args.mode == "score":
         checkpoint = torch.load(exp_path / "model" / "model_best_score.pth")

@@ -8,7 +8,6 @@ import random
 import shutil
 from pathlib import Path
 from typing import Optional
-from sklearn.cluster import KMeans
 
 import numpy as np
 import pandas as pd
@@ -34,17 +33,9 @@ def cycle_iteration(iterable):
         for i in iterable:
             yield i
 
-def calculate_similarity(M, use_sigmoid=True):
+def calculate_similarity(M):
     M = M / torch.linalg.vector_norm(M, dim=2, keepdim=True)
-    if use_sigmoid:
-        return torch.sigmoid(torch.bmm(M, M.permute(0,2,1)))
-    return torch.bmm(M, M.permute(0,2,1))
-
-def calculate_similarity_ema(M1, M2):
-    M1 = M1 / torch.linalg.vector_norm(M1, dim=2, keepdim=True)
-    M2 = M2 / torch.linalg.vector_norm(M2, dim=2, keepdim=True)
-    return torch.sigmoid(torch.bmm(M1, M2.permute(0,2,1)))
-    # return torch.bmm(M1, M2.permute(0,2,1))
+    return torch.bmm(M, M.permute(0, 2, 1))
 
 @dataclasses.dataclass
 class MeanTeacherTrainerOptions:
@@ -85,12 +76,12 @@ class MeanTeacherTrainerOptions:
         self.decoder = self.many_hot_encoder.decode_strong
         self.classification_criterion = torch.nn.BCEWithLogitsLoss().to(self.device)
         self.consistency_criterion = torch.nn.MSELoss().to(self.device)
+        self.clean_criterion = torch.nn.CrossEntropyLoss().to(self.device)
 
 
 class MeanTeacherTrainer(object):
     def __init__(
         self,
-        model_name,
         model,
         ema_model,
         loader_train_sync,
@@ -103,22 +94,30 @@ class MeanTeacherTrainer(object):
         pretrained=None,
         resume=None,
         trainer_options=None,
-        use_events = False,
-        use_bg = False,
-        use_sigmoid=True,
-        use_mixup=False,
-        use_clean=False,
-        km=None,
-        beta=None,
+        alpha=0,
+        beta=0,
     ):
-        self.use_events = use_events
-        self.use_bg = use_bg
-        self.use_sigmoid = use_sigmoid
-        self.use_mixup = use_mixup
-        self.use_clean = use_clean
-        self.km = km
+        self.exp_path = exp_path
+        _, self.exp_name = os.path.split(exp_path)
+        self.use_clean = False
+        self.use_concat = False
+        self.use_mixup = False
+        self.use_bg = False
+        self.use_contrast = False
+        self.alpha = alpha
         self.beta = beta
-        self.model_name = model_name
+
+        if "clean" in str(self.exp_name):
+            self.use_clean = True
+        if "concat" in str(self.exp_name):
+            self.use_concat = True
+            if "mixup" in str(self.exp_name):
+                self.use_mixup = True
+            if "bg" in str(self.exp_name):
+                self.use_bg = True
+            if "contrast" in str(self.exp_name):
+                self.use_contrast = True
+
         self.model = model.cuda() if torch.cuda.is_available() else model
         self.ema_model = ema_model.cuda() if torch.cuda.is_available() else ema_model
         for param in self.ema_model.parameters():
@@ -134,23 +133,25 @@ class MeanTeacherTrainer(object):
 
         if pretrained is not None:
             logging.info(f"load pretrained model: {pretrained}")
-            self.load(pretrained, pretrained)
+            self.load(pretrained)
 
         if resume is not None:
             logging.info(f"Resuming from {resume}")
             self.resume(exp_path / "model" / resume)
 
-        self.exp_path = exp_path
 
-        # 分类损失
         self.classification_criterion = trainer_options.classification_criterion
         self.loss_cls = lambda pred, target: self.classification_criterion(pred, target)
-        # 一致性损失
+
         self.consistency_criterion = trainer_options.consistency_criterion
         self.loss_con = lambda student_output, teacher_output: self.consistency_criterion(
             torch.sigmoid(student_output), torch.sigmoid(teacher_output)
         )
         self.max_consistency_cost = trainer_options.consistency_cost
+
+        if self.use_clean:
+            self.clean_criterion = trainer_options.clean_criterion
+            self.loss_clean = lambda pred, target: self.clean_criterion(pred, target)
 
         self.accum_grad = trainer_options.accum_grad
         self.grad_clip_threshold = trainer_options.grad_clip
@@ -161,15 +162,16 @@ class MeanTeacherTrainer(object):
         self.train_iter_real_unlabel = cycle_iteration(loader_train_real_unlabel)
         self.valid_loader = loader_valid
 
-
         self.losses_cls_strong = AverageMeter()
         self.losses_cls_weak = AverageMeter()
         self.losses_con_strong = AverageMeter()
         self.losses_con_weak = AverageMeter()
         self.losses_valid_strong = AverageMeter()
         self.losses_valid_weak = AverageMeter()
-        if self.use_events:
-            self.losses_event = AverageMeter()
+        if self.use_contrast:
+            self.losses_contrast = AverageMeter()
+        if self.use_clean:
+            self.losses_clean = AverageMeter()
 
         if self.options.early_stopping:
             self.early_stopping_call = EarlyStopping(trainer_options.patience, val_comp="sup")
@@ -200,69 +202,51 @@ class MeanTeacherTrainer(object):
                         break
 
     def update_ema_variables(self, alpha):
-        # Use the true average until the exponential average is more correct
         alpha = min(1 - 1 / (self.forward_count + 1), alpha)
         for ema_param, param in zip(self.ema_model.parameters(), self.model.parameters()):
-            # ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
             ema_param.data.mul_(alpha).add_(param.data, alpha=(1 - alpha))
 
     def mixup(self, data, data_ema, target, clean=None, alpha=0.2):
-        """Mixup data augmentation
-        https://arxiv.org/abs/1710.09412
-        Apply the same parameter for data and data_ema since to obtain the same target
-        Args:
-            data: input tensor for the student model
-            data_ema: input tensor for the teacher model
-        """
         batch_size = data.size(0)
         c = np.random.beta(alpha, alpha)
-
         perm = torch.randperm(batch_size)
-
-        if clean is not None and len(clean.shape) != 1:
-            mixed_clean = c * clean + (1 - c) * clean[perm, :]
-        else:
-            mixed_clean = None
 
         mixed_data = c * data + (1 - c) * data[perm, :]
         mixed_data_ema = c * data_ema + (1 - c) * data_ema[perm, :]
         mixed_target = c * target + (1 - c) * target[perm, :]
+        mixed_clean = None
+        if clean is not None:
+            mixed_clean = c * clean + (1 - c) * clean[perm, :]
 
         return mixed_data, mixed_data_ema, mixed_target, mixed_clean
 
     def train_one_step(self) -> None:
-        """ One iteration of a Mean Teacher model """
         self.forward_count += 1
         self.model.train()
         self.ema_model.train()
 
-        '''
-        load data
-        '''
-        if self.use_events:
-            sample_sync, sample_sync_ema, target_sync, sample_event, sample_event_ema, target_event, sample_clean = next(self.train_iter_sync)
-        else:
-            sample_sync, sample_sync_ema, target_sync, sample_clean = next(self.train_iter_sync)
-            sample_event = None
-            sample_event_ema = None
-            target_event = None
-        # sample_sync - (12, 1, 625, 128)
-        # sample_sync_ema - (12, 1, 625, 128)
-        # target_sync - (12, 156, 10)
-        if sample_clean is not None and len(sample_clean.shape) == 1:
-            sample_clean = None
+        sync_dict = next(self.train_iter_sync)
+
+        sample_sync, sample_sync_ema, target_sync = sync_dict['origin'][0], sync_dict['origin'][1], sync_dict['origin'][2]
+        target_clean = None
+        sample_concat, sample_concat_ema, target_concat = None, None, None
+        if 'clean' in sync_dict:
+            target_clean = sync_dict['clean'][0]
+        if 'concat' in sync_dict:
+            sample_concat, sample_concat_ema, target_concat = \
+                sync_dict['concat'][0], sync_dict['concat'][1], sync_dict['concat'][2]
 
         sample_real_weak, sample_real_weak_ema, target_real_weak, ids_real_weak = next(self.train_iter_real_weak)
         sample_real_unlabel, sample_real_unlabel_ema, target_real_unlabel, ids_real_unlabel = next(self.train_iter_real_unlabel)
 
         if self.options.use_mixup and 0.5 > random.random():
-            sample_sync, sample_sync_ema, target_sync, sample_clean = self.mixup(
-                sample_sync, sample_sync_ema, target_sync, sample_clean
+            sample_sync, sample_sync_ema, target_sync, target_clean = self.mixup(
+                sample_sync, sample_sync_ema, target_sync, target_clean
             )
 
-            if self.use_events and self.use_mixup:
-                sample_event, sample_event_ema, target_event, _ = self.mixup(
-                    sample_event, sample_event_ema, target_event
+            if self.use_concat and self.use_mixup:
+                sample_concat, sample_concat_ema, target_concat, _ = self.mixup(
+                    sample_concat, sample_concat_ema, target_concat
                 )
 
             sample_real_weak, sample_real_weak_ema, target_real_weak, _ = self.mixup(
@@ -279,14 +263,17 @@ class MeanTeacherTrainer(object):
 
         target_sync = target_sync.to(self.device)
         target_real_weak = target_real_weak.max(dim=1)[0].to(self.device)
+        if self.use_clean:
+            target_clean = target_clean.to(self.device)
 
-        if self.use_events:
-            sample_event, sample_event_ema = (
-                sample_event.to(self.device),
-                sample_event_ema.to(self.device),
+        if self.use_concat:
+            sample_concat, sample_concat_ema = (
+                sample_concat.to(self.device),
+                sample_concat_ema.to(self.device),
             )
-            target_event = target_event.to(self.device)
-            target_sync = torch.cat([target_sync, target_event], dim=0)
+            target_concat = target_concat.to(self.device)
+            sample_sync = torch.cat([sample_sync, sample_concat], dim=0)
+            target_sync = torch.cat([target_sync, target_concat], dim=0)
 
         sample_real_weak, sample_real_weak_ema = (
             sample_real_weak.to(self.device),
@@ -300,28 +287,20 @@ class MeanTeacherTrainer(object):
         rampup_value = ramps.exp_rampup(self.forward_count, self.options.rampup_length)
         consistency_cost = self.max_consistency_cost * rampup_value
         with torch.no_grad():
-            output_ema_sync = self.ema_model(sample_sync, events = sample_event)
+            output_ema_sync = self.ema_model(sample_sync, use_clean=self.use_clean, use_concat=self.use_concat)
             output_ema_weak = self.ema_model(sample_real_weak)
             output_ema_unlabel = self.ema_model(sample_real_unlabel)
 
-        output_sync = self.model(sample_sync, events = sample_event)
+        output_sync = self.model(sample_sync, use_clean=self.use_clean, use_concat=self.use_concat)
         output_weak = self.model(sample_real_weak)
         output_unlabel = self.model(sample_real_unlabel)
 
-        if self.use_clean:
-            bs, T, F = sample_clean.shape
-            km_labels = self.km.predict(
-                sample_clean.reshape(-1, F)
-            ).reshape(bs, T, F)
-
-        # compute classification loss
         loss_cls_strong = self.loss_cls(output_sync["strong"], target_sync)
         loss_cls_weak = (
             self.loss_cls(output_weak["weak"], target_real_weak) +
             self.loss_cls(output_sync["weak"], target_sync.max(dim=1)[0])
         ) / 2
 
-        # compute consistency loss
         loss_con_strong = consistency_cost * (
             self.loss_con(output_sync["strong"], output_ema_sync["strong"]) +
             self.loss_con(output_weak["strong"], output_ema_weak["strong"]) +
@@ -333,58 +312,81 @@ class MeanTeacherTrainer(object):
             self.loss_con(output_unlabel["weak"], output_ema_unlabel["weak"])
         ) / 3
 
-        if self.use_events and self.use_sigmoid is not None:
-            mat_label = torch.bmm(target_event, target_event.permute(0, 2, 1))
-            mat_feat = calculate_similarity(output_sync['events'], use_sigmoid=self.use_sigmoid)
-            # mat_feat = calculate_similarity_ema(output_sync['events'], output_ema_sync['events'])
-            loss_event = self.loss_cls(
-                mat_feat,
-                mat_label
-            )
-            if self.beta is not None:
-                loss_total = ((1-self.beta) * (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong)
-                          + self.beta * loss_event) / self.accum_grad
-            else:
-                loss_total = (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong + loss_event) / self.accum_grad
+        loss_origin = loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong
+
+        loss_clean = 0
+        if self.use_clean:
+            loss_clean = self.loss_clean(output_sync['clean'], target_clean)
+
+        loss_contrast = 0
+        mat_label, mat_feat = None, None
+        if self.use_concat:
+            mat_label = torch.bmm(target_concat, target_concat.permute(0, 2, 1))
+            mat_feat = calculate_similarity(output_sync['concat'])
+            if self.use_contrast:
+                loss_contrast = self.loss_cls(
+                    mat_feat,
+                    mat_label
+                )
+
+        if self.alpha != None and self.beta != None:
+            loss_total = (
+                    (1- self.alpha-self.beta) * loss_origin +
+                    self.alpha * loss_clean +
+                    self.beta * loss_contrast
+            ) / self.accum_grad
+        elif self.alpha != None:
+            loss_total = (loss_origin + self.alpha * loss_clean + loss_contrast) / self.accum_grad
+        elif self.beta != None:
+            loss_total = (loss_origin + self.alpha * loss_clean + self.beta * loss_contrast) / self.accum_grad
         else:
-            loss_event = 0
-            loss_total = (loss_cls_weak + loss_cls_strong + loss_con_weak + loss_con_strong) / self.accum_grad
-        loss_total.backward()  # Backprop
-        loss_total.detach()  # Truncate the graph
+            loss_total = (loss_origin + loss_clean + loss_contrast) / self.accum_grad
+        loss_total.backward()
+        loss_total.detach()
 
         self.losses_cls_strong.update(loss_cls_strong.item())
         self.losses_cls_weak.update(loss_cls_weak.item())
         self.losses_con_strong.update(loss_con_strong.item())
         self.losses_con_weak.update(loss_con_weak.item())
-        if self.use_events and loss_event != 0:
-            self.losses_event.update(loss_event.item())
+        if self.use_clean:
+            self.losses_clean.update(loss_clean.item())
+        if self.use_contrast:
+            self.losses_contrast.update(loss_contrast.item())
 
         if self.forward_count % self.options.log_interval == 0:
-            if self.use_events and self.use_sigmoid is not None:
-                if not os.path.exists(f"figs/{self.model_name}"):
-                    os.makedirs(f"figs/{self.model_name}", exist_ok=True)
+            if self.use_concat:
+                if not os.path.exists(f"{self.exp_path}/figs"):
+                    os.makedirs(f"{self.exp_path}/figs", exist_ok=True)
                 plt.matshow(mat_feat[0].detach().cpu().numpy())
                 plt.colorbar()
-                plt.savefig(f"figs/{self.model_name}/feature-{self.forward_count}.png")
+                plt.savefig(f"{self.exp_path}/figs/feature-{self.forward_count}.png")
                 plt.matshow(mat_label[0].cpu().numpy())
                 plt.colorbar()
-                plt.savefig(f"figs/{self.model_name}/label-{self.forward_count}.png")
+                plt.savefig(f"{self.exp_path}/figs/label-{self.forward_count}.png")
                 plt.close()
             logging.info("After {} iteration".format(self.forward_count))
             logging.info("\t loss cls strong: {}".format(loss_cls_strong.item()))
             logging.info("\t loss cls weak: {}".format(loss_cls_weak.item()))
             logging.info("\t loss con strong: {}".format(loss_con_strong.item()))
             logging.info("\t loss con weak: {}".format(loss_con_weak.item()))
-            if self.use_events and loss_event!=0:
-                logging.info("\t loss event: {}".format(loss_event.item()))
+            if self.use_contrast:
+                logging.info("\t loss contrast: {}".format(loss_contrast.item()))
                 wandb.log(
                     {
-                        "losses_event": self.losses_event.avg,
+                        "losses_contrast": self.losses_contrast.avg,
                     },
                     step=self.forward_count,
                 )
-                self.losses_event.reset()
-
+                self.losses_contrast.reset()
+            if self.use_clean:
+                logging.info("\t loss clean: {}".format(loss_clean.item()))
+                wandb.log(
+                    {
+                        "losses_clean": self.losses_clean.avg,
+                    },
+                    step=self.forward_count,
+                )
+                self.losses_clean.reset()
             wandb.log(
                 {
                     "losses_cls_strong": self.losses_cls_strong.avg,
@@ -402,7 +404,7 @@ class MeanTeacherTrainer(object):
 
         if self.forward_count % self.accum_grad != 0:
             return
-        # compute the gradient norm to check if it is normal or not
+
         grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_threshold)
         if math.isnan(grad_norm):
             logging.warning("grad norm is nan. Do not update model.")

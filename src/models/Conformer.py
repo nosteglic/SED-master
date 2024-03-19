@@ -4,7 +4,6 @@ import torch
 
 from models.baseline_model import CNN
 from models.conformer.conformer_encoder import ConformerEncoder
-from models.conformer.conformer_decoder import CNNUpsampler
 
 class SEDModel(torch.nn.Module):
     def __init__(
@@ -12,30 +11,26 @@ class SEDModel(torch.nn.Module):
         n_class,
         cnn_kwargs=None,
         encoder_kwargs=None,
-        decoder_kwargs=None,
-        gen_count=2,
-        ptr=8,
         pooling="token",
         layer_init="pytorch",
         use_clean=False,
+        num_label=50,
     ):
         super(SEDModel, self).__init__()
 
         self.n_class = n_class
-        self.ptr = ptr
-        self.gen_count=gen_count
         self.cnn = CNN(n_in_channel=1, **cnn_kwargs)
         self.input_dim = self.cnn.nb_filters[-1]
         adim = encoder_kwargs["adim"]
         self.pooling = pooling
 
         self.encoder = ConformerEncoder(self.input_dim, **encoder_kwargs)
+        self.classifier = torch.nn.Linear(adim, n_class)
 
-        self.use_clean = use_clean
         if use_clean:
             self.projection1 = torch.nn.Linear(adim, adim * 4)
             self.projection2 = torch.nn.Linear(adim * 4, adim * 2)
-        self.classifier = torch.nn.Linear(adim, n_class)
+            self.embedding = torch.nn.Embedding(num_label, adim * 2)
 
         if self.pooling == "attention":
             self.dense = torch.nn.Linear(adim, n_class)
@@ -44,18 +39,10 @@ class SEDModel(torch.nn.Module):
 
         elif self.pooling == "token":
             self.linear_emb = torch.nn.Linear(1, self.input_dim)
-
-        self.unsampler = CNNUpsampler(n_in_channel=144)
         self.reset_parameters(layer_init)
 
-    def forward(self, x, events=None, mask=None):
-        if events is not None:
-            x = torch.cat([x, events], dim=0)
-            use_events = True
-        else:
-            use_events = False
-
-        x = self.cnn(x) # x - (32, 64, --, 1)
+    def forward(self, x, mask=None, use_clean=False, use_concat=False):
+        x = self.cnn(x)
         bs, chan, frames, freq = x.size()
         if freq != 1:
             warnings.warn(
@@ -64,8 +51,8 @@ class SEDModel(torch.nn.Module):
             x = x.permute(0, 2, 1, 3)
             x = x.contiguous().view(bs, frames, chan * freq)
         else:
-            x = x.squeeze(-1) # x - (12, 128, 156)
-            x = x.permute(0, 2, 1) # x - [bs, frames, chan] - (12, 156, 128)
+            x = x.squeeze(-1)
+            x = x.permute(0, 2, 1)
 
         if self.pooling == "token":
             tag_token = self.linear_emb(torch.ones(x.size(0), 1, 1).cuda())
@@ -73,22 +60,28 @@ class SEDModel(torch.nn.Module):
 
         x, _ = self.encoder(x, mask)
 
-        # x_test = x.unsqueeze(1)
-        if self.use_clean:
-            if use_events:
-                x_origin = x[:events.shape[0], :, :]
+        logits = None
+        if use_clean:
+            if use_concat:
+                x_origin = x[: bs // 2, 1:, :]
             else:
-                x_origin = x
+                x_origin = x[:, 1:, :]
             x_origin = self.projection1(x_origin)
             x_origin = self.projection2(x_origin)
+            logits = torch.cosine_similarity(
+                x_origin.unsqueeze(2),
+                self.embedding.weight.unsqueeze(0).unsqueeze(0),
+                dim=-1
+            )
 
+        strong = None
+        weak = None
         if self.pooling == "attention":
             strong = self.classifier(x)
-            sof = self.dense(x)  # [bs, frames, nclass]
+            sof = self.dense(x)
             sof = self.softmax(sof)
             sof = torch.clamp(sof, min=1e-7, max=1)
-            weak = (torch.sigmoid(strong) * sof).sum(1) / sof.sum(1)  # [bs, nclass]
-            # Convert to logit to calculate loss with bcelosswithlogits
+            weak = (torch.sigmoid(strong) * sof).sum(1) / sof.sum(1)
             weak = torch.log(weak / (1 - weak))
         elif self.pooling == "token":
             x = self.classifier(x)
@@ -101,10 +94,10 @@ class SEDModel(torch.nn.Module):
         results = {}
         results["strong"] = strong
         results["weak"] = weak
-        if use_events:
-            results["events"] = x[events.shape[0]:, 1:, :]
-        if self.use_clean:
-            results["x"] = x_origin
+        if use_concat:
+            results["concat"] = x[bs//2:, 1:, :]
+        if use_clean:
+            results['clean'] = logits
         return results
 
     def reset_parameters(self, initialization: str = "pytorch"):
