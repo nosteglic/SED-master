@@ -3,25 +3,39 @@
 export WANDB_API_KEY='6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
 export WANDB_MODE='offline'
 export CUDA_VISIBLE_DEVICES=3
+export WANDB_DIR=/data2/syx/results
 
-stage=2
-use_nohup=1
+cat << EOF
+choose stage: [1, 2, 3]
+stage 1: feature extraction
+stage 2: train model
+stage 3: test model
+EOF
+read -p "$1" stage
+stage=3
+use_nohup=0
 debugmode=1
 model_type=Conformer # CRNN/Conformer
 batch_size=32
 batch_size_sync=32
-use_clean=0
+use_clean=2 # 1 sm 2 cs
 use_events=1
-use_mixup=1
 use_bg=0
 use_sigmoid=-1
+use_mixup=0
 beta=-1
 seed=7
+prefix="timeshift_cs"
+# sm: softmax   cs: cosine_similarity
+# noaug: 原始数据不做timeshift和mixup
+# timeshift： 原始数据只做timeshift
+# mixup： 原始数据只做mixup
+# buth： 原始数据timeshift和mixup都做
 
-exp_name="$model_type-b$batch_size-sync$batch_size_sync"
+exp_name="$model_type-b$batch_size"
 
-if [ $use_clean -eq 1 ]; then
-  exp_name="$exp-clean"
+if [ $use_clean -eq 1 ] || [ $use_clean -eq 2 ]; then
+  exp_name="$exp_name-clean"
 fi
 if [ $use_events -eq 1 ]; then
   exp_name="$exp_name-concat"
@@ -82,7 +96,7 @@ if [ ${stage} -eq 2 ]; then
     echo "--------------Stage 2: Training model--------------"
     echo "config currently used: config/dcase_21_MT_$model_type.yaml"
     echo "nohup? $use_nohup"
-    echo "exp name: $exp_name"
+    echo "exp name: ${exp_name}_$prefix"
     echo "model_type: $model_type"
     echo "batch_size: $batch_size"
     echo "batch_size_sync: $batch_size_sync"
@@ -111,11 +125,13 @@ if [ ${stage} -eq 2 ]; then
     --use_mixup $use_mixup \
     --beta $beta \
     --use_clean $use_clean \
+    --prefix "$prefix" \
     --seed $seed \
     --debugmode $debugmode \
-    > logs/$exp_name.log 2>&1 &
+    > /data2/syx/results/logs/${exp_name}_$prefix.log 2>&1 &
   else
     python -u src/methods/train_MT.py \
+    --exp_name $exp_name \
     --model_type $model_type \
     --batch_size $batch_size \
     --batch_size_sync $batch_size_sync \
@@ -124,6 +140,8 @@ if [ ${stage} -eq 2 ]; then
     --use_sigmoid $use_sigmoid \
     --use_mixup $use_mixup \
     --beta $beta \
+    --use_clean $use_clean \
+    --prefix "$prefix" \
     --seed $seed \
     --debugmode $debugmode
   fi
@@ -135,7 +153,7 @@ fi
 if [ ${stage} -eq 3 ]; then
   func_stage3_prompt(){
     echo "--------------Stage 3: Validing/Testing model--------------"
-    echo "model currently used: $exp_name"
+    echo "model currently used: ${exp_name}_$prefix"
     echo "on_test? $on_test"
     echo "revalid? $revalid"
     echo "mode: $test_mode"
@@ -146,6 +164,7 @@ if [ ${stage} -eq 3 ]; then
     fun_confirm_cfg "Please confirm your exp config again: [Y/N]" "Canceling..."
     python -u src/methods/test_MT.py  \
     --exp_name $exp_name \
+    --prefix "$prefix" \
     --on_test $on_test \
     --revalid $revalid \
     --mode $test_mode
