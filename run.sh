@@ -2,8 +2,10 @@
 
 export WANDB_API_KEY='6109ea69f151b0fa881f2c3a60db2ce11e9b8838'
 export WANDB_MODE='offline'
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 export WANDB_DIR=/data2/syx/results
+
+timestamp=$(date '+%Y-%m-%d_%H:%M:%S')
 
 cat << EOF
 choose stage: [1, 2, 3]
@@ -14,10 +16,8 @@ EOF
 read stage
 
 use_nohup=1
-
 model_type=Conformer # CRNN/Conformer
 
-exp_name=
 on_test=1
 revalid=1
 test_mode=score # loss/score/psds
@@ -68,7 +68,7 @@ if [ ${stage} -eq 2 ]; then
   if [ $use_nohup -eq 1 ]; then
     nohup python -u src/methods/train_MT.py \
     --model_type $model_type \
-    > /data2/syx/results/logs/${model_type}_${(date '+%Y-%m-%d %H:%M:%S')}.log 2>&1 &
+    >> /data2/syx/results/logs/${model_type}_${timestamp}.log 2>&1 &
     pid=$!
     echo "PID: $pid"
   else
@@ -84,6 +84,7 @@ fi
 if [ ${stage} -eq 3 ]; then
   func_stage3_prompt(){
     echo "--------------Stage 3: Validing/Testing model--------------"
+    echo "exp_name: $exp_name"
     echo "on_test? $on_test"
     echo "revalid? $revalid"
     echo "mode: $test_mode"
@@ -107,6 +108,7 @@ if [ ${stage} -eq 3 ]; then
       revalid=0
     fi
   }
+  read -p "Input your exp_name: " exp_name
   func_stage3_py
   if [ $revalid -eq 1 ]; then
     fun_confirm_cfg "Continue to test? [Y/N]" "Only revalid..."
