@@ -329,15 +329,15 @@ class MeanTeacherTrainer(object):
                     mat_label
                 )
 
-        if self.alpha != None and self.beta != None:
+        if self.alpha is not None and self.beta is not None:
             loss_total = (
                     (1- self.alpha-self.beta) * loss_origin +
                     self.alpha * loss_clean +
                     self.beta * loss_contrast
             ) / self.accum_grad
-        elif self.alpha != None:
+        elif self.alpha is not None:
             loss_total = (loss_origin + self.alpha * loss_clean + loss_contrast) / self.accum_grad
-        elif self.beta != None:
+        elif self.beta is not None:
             loss_total = (loss_origin + self.alpha * loss_clean + self.beta * loss_contrast) / self.accum_grad
         else:
             loss_total = (loss_origin + loss_clean + loss_contrast) / self.accum_grad
