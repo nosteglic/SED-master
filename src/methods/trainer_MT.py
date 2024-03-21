@@ -111,7 +111,7 @@ class MeanTeacherTrainer(object):
             self.use_clean = True
         if "concat" in str(self.exp_name):
             self.use_concat = True
-            if "mixup" in str(self.exp_name):
+            if "concat_mixup" in str(self.exp_name):
                 self.use_mixup = True
             if "bg" in str(self.exp_name):
                 self.use_bg = True
