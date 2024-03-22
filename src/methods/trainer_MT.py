@@ -244,16 +244,16 @@ class MeanTeacherTrainer(object):
                 sample_sync, sample_sync_ema, target_sync, target_clean
             )
 
-            if self.use_concat and self.use_mixup:
-                sample_concat, sample_concat_ema, target_concat, _ = self.mixup(
-                    sample_concat, sample_concat_ema, target_concat
-                )
-
             sample_real_weak, sample_real_weak_ema, target_real_weak, _ = self.mixup(
                 sample_real_weak, sample_real_weak_ema, target_real_weak
             )
             sample_real_unlabel, sample_real_unlabel_ema, target_real_unlabel, _ = self.mixup(
                 sample_real_unlabel, sample_real_unlabel_ema, target_real_unlabel
+            )
+
+        if self.use_concat and self.use_mixup and 0.5 > random.random():
+            sample_concat, sample_concat_ema, target_concat, _ = self.mixup(
+                sample_concat, sample_concat_ema, target_concat
             )
 
         sample_sync, sample_sync_ema = (
