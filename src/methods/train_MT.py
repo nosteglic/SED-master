@@ -355,7 +355,7 @@ def main(args):
 
     alpha, beta = None, None
     if cfg['alpha'] is not None:
-        beta = float(cfg['alpha'])
+        alpha = float(cfg['alpha'])
     if cfg['beta'] is not None:
         beta = float(cfg['beta'])
     trainer = MeanTeacherTrainer(
