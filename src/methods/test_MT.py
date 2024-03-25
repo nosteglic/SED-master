@@ -173,7 +173,8 @@ def main(args):
         )
     elif model_type == "CRNN":
         model = CRNN(
-            n_class=len(classes), attention=cfg["model"]["attention"], cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"]
+            n_class=len(classes), attention=cfg["model"]["attention"], cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"],
+            use_clean=cfg['use_clean']
         )
 
     if args.mode == "score":

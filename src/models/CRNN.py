@@ -8,15 +8,14 @@ class SEDModel(nn.Module):
     def __init__(self,
                  n_class,
                  attention=True,
-                 gen_count=2,
-                 ptr=4,
                  cnn_kwargs=None,
-                 rnn_kwargs=None,):
+                 rnn_kwargs=None,
+                 use_clean=False,
+                 num_label=50,
+                 ):
         super(SEDModel, self).__init__()
 
         self.n_class = n_class
-        self.ptr = ptr
-        self.gen_count=gen_count
         self.cnn = CNN(n_in_channel=1, **cnn_kwargs)
         self.input_dim = self.cnn.nb_filters[-1]
         self.rnn = BiGRU(n_in=self.input_dim, **rnn_kwargs)
@@ -26,16 +25,18 @@ class SEDModel(nn.Module):
         n_hidden = rnn_kwargs["n_hidden"]
         self.classifier = nn.Linear(n_hidden * 2, n_class)
 
+        if use_clean:
+            self.projection1 = torch.nn.Linear(n_hidden * 2, n_hidden * 4)
+            self.projection2 = torch.nn.Linear(n_hidden * 4, n_hidden * 2)
+            self.embedding = torch.nn.Embedding(num_label, n_hidden * 2)
+
         if self.attention:
             self.dense = nn.Linear(n_hidden * 2, n_class)
             self.softmax = nn.Softmax(dim=-1)
 
         self.reset_parameters()
 
-    def forward(self, x, events=None): # x (bs, chan, frames, freqs) - (12, 1, 625, 128)
-        if events is not None:
-            x = torch.cat([x, events], dim=0)
-
+    def forward(self, x, use_clean=False, use_concat=False): # x (bs, chan, frames, freqs) - (12, 1, 625, 128)
         x = self.cnn(x) # x - (12, 128, 156, 1)
         bs, chan, frames, freq = x.size()
         if freq != 1:
@@ -52,6 +53,20 @@ class SEDModel(nn.Module):
         x = self.rnn(x) #x - [bs, frames, 2 * chan] - (12, 156, 256)
         x = self.dropout(x)
 
+        logits = None
+        if use_clean:
+            if use_concat:
+                x_origin = x[: bs // 2, :, :]
+            else:
+                x_origin = x[:, :, :]
+            x_origin = self.projection1(x_origin)
+            x_origin = self.projection2(x_origin)
+            logits = torch.cosine_similarity(
+                x_origin.unsqueeze(2),
+                self.embedding.weight.unsqueeze(0).unsqueeze(0),
+                dim=-1
+            )
+
         #classifier
         strong = self.classifier(x) #strong size : [bs, frames, n_class] - (12, 156, 10)
         if self.attention:
@@ -63,13 +78,14 @@ class SEDModel(nn.Module):
         else:
             weak = strong.mean(1)
 
-        if events is not None:
-            return {
-                "strong": strong,
-                "weak": weak,
-                "events": x[events.shape[0]:, :, :],
-            }
-        return {"strong": strong, "weak": weak}
+        results = {}
+        results["strong"] = strong
+        results["weak"] = weak
+        if use_concat:
+            results["concat"] = x[bs // 2:, :, :]
+        if use_clean:
+            results['clean'] = logits
+        return results
 
     def reset_parameters(self, initialization: str = "pytorch"):
         if initialization.lower() == "pytorch":

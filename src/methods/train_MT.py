@@ -42,7 +42,11 @@ def collect_stats(datasets, save_path):
     for dataset in datasets:
         dataloader = DataLoader(dataset, batch_size=1)
 
-        for x, _, _ in tqdm(dataloader):
+        for x in tqdm(dataloader):
+            if len(x) == 1:
+                x = x['origin'][0]
+            else:
+                x = x[0]
             if len(stats) == 0:
                 stats["mean"] = np.zeros(x.size(-1))
                 stats["std"] = np.zeros(x.size(-1))
@@ -309,7 +313,7 @@ def main(args):
 
     model = None
     ema_model = None
-    if model_type == "Conformer" or model_type == "test":
+    if model_type == "Conformer":
         model = Conformer(
             n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], encoder_kwargs=cfg["model"]["encoder"],
             use_clean=cfg['use_clean']
@@ -318,14 +322,16 @@ def main(args):
             n_class=len(classes), cnn_kwargs=cfg["model"]["cnn"], encoder_kwargs=cfg["model"]["encoder"],
             use_clean=cfg['use_clean']
         )
-    elif cfg['model_type'] == "CRNN":
+    elif cfg['model_type'] == "CRNN" or model_type == "test":
         model = CRNN(
             n_class=len(classes), attention=cfg["model"]["attention"],
-            cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"]
+            cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"],
+            use_clean=cfg['use_clean']
         )
         ema_model = CRNN(
             n_class=len(classes), attention=cfg["model"]["attention"],
-            cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"]
+            cnn_kwargs=cfg["model"]["cnn"], rnn_kwargs=cfg["model"]["rnn"],
+            use_clean=cfg['use_clean']
         )
 
     logging.info(model)
