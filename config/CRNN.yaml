@@ -9,6 +9,7 @@ feature:
 
 pooling_time_ratio: 4
 
+batch_size_sync: 12
 batch_size: 12
 
 model:
