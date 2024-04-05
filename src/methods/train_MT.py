@@ -274,7 +274,7 @@ def main(args):
 
     loader_train_sync = DataLoader(
         train_sync_dataset,
-        batch_size=cfg['batch_size'],
+        batch_size=cfg['batch_size_sync'],
         shuffle=True,
         num_workers=cfg["num_workers"],
         drop_last=True,

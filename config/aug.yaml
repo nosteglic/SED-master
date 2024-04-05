@@ -2,12 +2,12 @@ norm_mode: gcmvn
 
 apply_prob: 0.5
 
-mixup: False
+mixup: True
 
 data_aug:
   semi_supervised_training: True
   time_shift:
-    apply: False
+    apply: True
     params:
       mean: 0
       std: 90
